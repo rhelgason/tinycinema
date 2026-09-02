@@ -14,7 +14,7 @@ import numpy as np
 
 from .base import Frame, FrameSource, MediaInfo
 
-PATTERNS = ("ball", "plasma", "bars")
+PATTERNS = ("ball", "plasma", "bars", "mandelbrot")
 
 
 class DemoSource(FrameSource):
@@ -40,7 +40,12 @@ class DemoSource(FrameSource):
     ) -> Iterator[Frame]:
         fps = self.info.fps
         duration = self.info.duration
-        draw = {"ball": _ball, "plasma": _plasma, "bars": _bars}[self.pattern]
+        draw = {
+            "ball": _ball,
+            "plasma": _plasma,
+            "bars": _bars,
+            "mandelbrot": _mandelbrot,
+        }[self.pattern]
         grid = _Grid(width, height, pixel_aspect)
 
         n = int(start * fps)
@@ -107,6 +112,50 @@ def _bars(g: _Grid, t: float) -> np.ndarray:
     band = np.exp(-(((g.xs - sweep) * 12.0) ** 2))
     frame = np.clip(frame + band[..., None] * 60.0, 0, 255)
     return frame.astype(np.uint8)
+
+
+def _mandelbrot(g: _Grid, t: float) -> np.ndarray:
+    """A slow zoom into the Mandelbrot set.
+
+    Unlike the smooth patterns, this has hard edges and fine detail at every
+    scale, which is what actually exercises a renderer -- it is the difference
+    between "a gradient" and "you can see what it is" in braille and ascii.
+    """
+    # Start on the whole set -- instantly recognisable -- then drift in towards a
+    # classic Misiurewicz point, where the detail stays interesting all the way.
+    zoom = 0.90 ** (t * 2.0)
+    span = 3.2 * zoom
+    blend = 1.0 - zoom
+    cx = -0.6 + (-0.743643887037151 + 0.6) * blend
+    cy = 0.0 + 0.13182590420533 * blend
+
+    x = cx + (g.xs - 0.5) * span
+    # keep the plane square on screen, accounting for non-square pixels
+    y = cy + (g.ys - 0.5) * span * (g.h / max(g.w * g.pa, 1e-6))
+
+    zx = np.zeros_like(x + y)
+    zy = np.zeros_like(zx)
+    count = np.zeros_like(zx)
+    iterations = 90
+    for _ in range(iterations):
+        inside = (zx * zx + zy * zy) <= 4.0
+        if not inside.any():
+            break
+        zx_new = np.where(inside, zx * zx - zy * zy + x, zx)
+        zy_new = np.where(inside, 2.0 * zx * zy + y, zy)
+        zx, zy = zx_new, zy_new
+        count += inside
+
+    escaped = count < iterations
+    v = np.sqrt(count / iterations)  # sqrt spreads the bands out near the edge
+    # The classic blue -> white -> amber ramp. Gentler than raw sinusoids, and
+    # the wide luminance range is what makes it read in the monochrome modes.
+    r = 9.0 * (1 - v) * v**3
+    gr = 15.0 * (1 - v) ** 2 * v**2
+    b = 8.5 * (1 - v) ** 3 * v
+    rgb = np.stack(np.broadcast_arrays(r, gr, b), axis=-1)
+    rgb = np.where(escaped[..., None], rgb, 0.0)  # the set itself stays black
+    return (np.clip(rgb, 0.0, 1.0) * 255).astype(np.uint8)
 
 
 def _ball(g: _Grid, t: float) -> np.ndarray:
