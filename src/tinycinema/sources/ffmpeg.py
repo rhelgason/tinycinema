@@ -251,9 +251,12 @@ class FFmpegSource(FrameSource):
             yield start + n * step, frame
             n += 1
 
-        # Producing zero frames means ffmpeg failed, not that the video was empty.
+        # Zero frames from the start of a stream means ffmpeg failed. Zero frames
+        # after a seek just means the seek landed past the end -- that is an EOF,
+        # not an error, and matters because without ffprobe we don't know the
+        # duration and so can't clamp the seek target.
         # (Deliberately outside a finally: an early generator close is not an error.)
-        if n == 0:
+        if n == 0 and start <= 0:
             try:
                 proc.wait(timeout=2.0)
             except subprocess.TimeoutExpired:

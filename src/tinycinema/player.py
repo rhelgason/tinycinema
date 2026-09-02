@@ -80,6 +80,7 @@ class Player:
         self._paused = False
         self._origin = 0.0  # perf_counter value corresponding to position 0
         self._recent = deque(maxlen=30)  # draw timestamps, for the live fps read-out
+        self._pending_keys: deque[str] = deque()
         self._message = ""
         self._message_until = 0.0
 
@@ -216,9 +217,18 @@ class Player:
     def _hud_enabled(self) -> bool:
         return self.opts.hud and self.is_tty and not self.opts.once
 
-    def _handle_keys(self) -> Restart | None:
-        for key in self.keys.poll():
-            action = self._apply_key(key)
+    def _handle_keys(self, timeout: float = 0.0) -> Restart | None:
+        """Apply queued keys, stopping at the first that needs a pipeline restart.
+
+        Keys behind that one stay queued. Returning early used to discard them,
+        so pressing `r` three times to skip forward two render modes only ever
+        advanced one.
+        """
+        pending = self._pending_keys
+        if not pending:
+            pending.extend(self.keys.poll(timeout))
+        while pending:
+            action = self._apply_key(pending.popleft())
             if action is not None:
                 return action
         return None
@@ -281,10 +291,9 @@ class Player:
     def _wait_while_paused(self) -> Restart | None:
         """Idle without burning CPU, but stay responsive to keys and resizes."""
         while self._paused:
-            for key in self.keys.poll(timeout=0.05):
-                action = self._apply_key(key)
-                if action is not None:
-                    return action
+            action = self._handle_keys(timeout=0.05)
+            if action is not None:
+                return action
             if self.term.take_resize():
                 return "resize"
         return None

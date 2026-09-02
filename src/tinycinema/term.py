@@ -23,6 +23,7 @@ import shutil
 import signal
 import sys
 import termios
+import time
 import tty
 from dataclasses import dataclass
 
@@ -48,6 +49,9 @@ SGR_DEFAULT_FG = "\x1b[39m"
 SGR_DEFAULT_BG = "\x1b[49m"
 
 DEFAULT = -1  # sentinel in a CellGrid colour channel meaning "terminal default"
+
+#: Seconds a new terminal size must hold before we rebuild the pipeline.
+RESIZE_DEBOUNCE = 0.15
 
 # Merging two runs of changed cells costs us the unchanged cells in between, but
 # saves a ~7-byte cursor-move. Below this gap width, merging wins.
@@ -94,24 +98,65 @@ class CellGrid:
 # ---------------------------------------------------------------------------
 
 
+#: A colour channel triple packed into one int. DEFAULT maps outside 24-bit range
+#: so "terminal default" compares unequal to every real colour.
+_DEFAULT_KEY = 1 << 24
+#: Multiplier that stacks the fg key above the bg key in a single int.
+_FG_SHIFT = 1 << 25
+
+
+def pack_colors(plane: np.ndarray) -> np.ndarray:
+    """(rows, cols, 3) int16 RGB -> (rows, cols) int64, one integer per colour.
+
+    Comparing packed integers instead of three channels makes both the frame
+    diff and the run-splitting a single vectorised op, and gives the SGR cache a
+    plain int key instead of a tuple that has to be rebuilt per cell.
+    """
+    p = plane.astype(np.int64)
+    packed = (p[..., 0] << 16) | (p[..., 1] << 8) | p[..., 2]
+    return np.where(p[..., 0] < 0, _DEFAULT_KEY, packed)
+
+
+def _fg_seq(key: int) -> str:
+    if key == _DEFAULT_KEY:
+        return "39"
+    return f"38;2;{(key >> 16) & 0xFF};{(key >> 8) & 0xFF};{key & 0xFF}"
+
+
+def _bg_seq(key: int) -> str:
+    if key == _DEFAULT_KEY:
+        return "49"
+    return f"48;2;{(key >> 16) & 0xFF};{(key >> 8) & 0xFF};{key & 0xFF}"
+
+
 class FrameWriter:
-    """Paints CellGrids to a tty, emitting the minimum plausible byte stream."""
+    """Paints CellGrids to a tty, emitting the minimum plausible byte stream.
+
+    The inner loop runs over *spans of constant colour* rather than cells, and
+    every value it touches has been bulk-converted to Python ints and strings
+    first. Per-cell numpy scalar indexing costs ~2us a cell, which at 7680 cells
+    is 15ms a frame -- half the budget at 30fps, spent on nothing but boxing.
+    """
 
     def __init__(self, stream=None, *, synchronized: bool = True) -> None:
         self._stream = stream if stream is not None else sys.stdout
         self._synchronized = synchronized
-        self._prev: CellGrid | None = None
+        self._prev_chars: np.ndarray | None = None
+        self._prev_keys: np.ndarray | None = None
         # pen state, so we only emit SGR on an actual colour change
-        self._pen_fg: tuple[int, int, int] | None = None
-        self._pen_bg: tuple[int, int, int] | None = None
-        self._sgr_cache: dict[tuple, str] = {}
+        self._pen_fg = -1
+        self._pen_bg = -1
+        self._fg_cache: dict[int, str] = {}
+        self._bg_cache: dict[int, str] = {}
+        self._both_cache: dict[int, str] = {}
         self.bytes_written = 0
 
     def invalidate(self) -> None:
         """Force the next draw to be a full repaint (after a resize, say)."""
-        self._prev = None
-        self._pen_fg = None
-        self._pen_bg = None
+        self._prev_chars = None
+        self._prev_keys = None
+        self._pen_fg = -1
+        self._pen_bg = -1
 
     def draw(self, grid: CellGrid) -> None:
         payload = self.encode(grid)
@@ -124,81 +169,91 @@ class FrameWriter:
     def encode(self, grid: CellGrid) -> str:
         """Build the byte string for this frame. Separated out so it's testable."""
         rows, cols = grid.shape
-        prev = self._prev
-        full = (
-            prev is None
-            or prev.shape != grid.shape
-            # a resize can leave stale cells outside the previous grid
-        )
+        chars = np.ascontiguousarray(grid.chars, dtype=np.uint32)
+        if (chars == 0).any():
+            # numpy strips trailing NULs from a 'U' view, which would silently
+            # shorten a row string and misalign every span after it.
+            chars = np.where(chars == 0, 32, chars)
+        keys = pack_colors(grid.fg) * _FG_SHIFT + pack_colors(grid.bg)
+
+        prev_chars, prev_keys = self._prev_chars, self._prev_keys
+        # A resize leaves stale cells outside the old grid, so start over.
+        full = prev_chars is None or prev_chars.shape != chars.shape
 
         if full:
             changed = np.ones((rows, cols), dtype=bool)
         else:
-            assert prev is not None
-            changed = (
-                (grid.chars != prev.chars)
-                | (grid.fg != prev.fg).any(axis=2)
-                | (grid.bg != prev.bg).any(axis=2)
-            )
+            changed = (chars != prev_chars) | (keys != prev_keys)
+
+        self._prev_chars, self._prev_keys = chars, keys
 
         dirty_rows = np.flatnonzero(changed.any(axis=1))
         if dirty_rows.size == 0:
-            self._prev = grid
             return ""
 
         out: list[str] = []
-        if self._synchronized:
-            out.append(SYNC_BEGIN)
-        if full:
-            # Reset the pen too: we can't trust state across a full repaint.
-            out.append(SGR_RESET + CURSOR_HOME)
-            self._pen_fg = None
-            self._pen_bg = None
-
-        chars = grid.chars
-        fg = grid.fg
-        bg = grid.bg
         append = out.append
+        if self._synchronized:
+            append(SYNC_BEGIN)
+        if full:
+            # We can't trust the pen state across a full repaint.
+            append(SGR_RESET + CURSOR_HOME)
+            self._pen_fg = self._pen_bg = -1
 
-        for r in int_iter(dirty_rows):
+        # uint32 codepoints ARE UTF-32, so a row reinterprets as a Python string
+        # for free -- no per-character chr() call.
+        row_text = chars.view(f"U{cols}").ravel().tolist()
+
+        fg_cache, bg_cache, both_cache = self._fg_cache, self._bg_cache, self._both_cache
+        pen_fg, pen_bg = self._pen_fg, self._pen_bg
+
+        for r in dirty_rows.tolist():
+            key_row = keys[r]
+            key_list = key_row.tolist()
+            text = row_text[r]
+
             for c0, c1 in _runs(np.flatnonzero(changed[r])):
                 append(f"\x1b[{r + 1};{c0 + 1}H")
-                for c in range(c0, c1 + 1):
-                    f = (int(fg[r, c, 0]), int(fg[r, c, 1]), int(fg[r, c, 2]))
-                    b = (int(bg[r, c, 0]), int(bg[r, c, 1]), int(bg[r, c, 2]))
-                    if f != self._pen_fg or b != self._pen_bg:
-                        append(self._sgr(f, b))
-                        self._pen_fg = f
-                        self._pen_bg = b
-                    append(chr(chars[r, c]))
+                span = key_row[c0 : c1 + 1]
+                # split the run wherever the colour changes; emit each span whole
+                bounds = (np.flatnonzero(span[1:] != span[:-1]) + 1).tolist()
+                start = c0
+                for b in (*bounds, span.size):
+                    end = c0 + b
+                    key = key_list[start]
+                    fg = key // _FG_SHIFT
+                    bg = key - fg * _FG_SHIFT
+                    if fg != pen_fg:
+                        if bg != pen_bg:
+                            seq = both_cache.get(key)
+                            if seq is None:
+                                seq = f"\x1b[{_fg_seq(fg)};{_bg_seq(bg)}m"
+                                if len(both_cache) < 8192:
+                                    both_cache[key] = seq
+                            pen_bg = bg
+                        else:
+                            seq = fg_cache.get(fg)
+                            if seq is None:
+                                seq = f"\x1b[{_fg_seq(fg)}m"
+                                if len(fg_cache) < 8192:
+                                    fg_cache[fg] = seq
+                        pen_fg = fg
+                        append(seq)
+                    elif bg != pen_bg:
+                        seq = bg_cache.get(bg)
+                        if seq is None:
+                            seq = f"\x1b[{_bg_seq(bg)}m"
+                            if len(bg_cache) < 8192:
+                                bg_cache[bg] = seq
+                        pen_bg = bg
+                        append(seq)
+                    append(text[start:end])
+                    start = end
 
+        self._pen_fg, self._pen_bg = pen_fg, pen_bg
         if self._synchronized:
             append(SYNC_END)
-
-        self._prev = grid
         return "".join(out)
-
-    def _sgr(self, f: tuple[int, int, int], b: tuple[int, int, int]) -> str:
-        """Colour-change escape, combining fg+bg into one sequence when both move."""
-        need_fg = f != self._pen_fg
-        need_bg = b != self._pen_bg
-        key = (f if need_fg else None, b if need_bg else None)
-        hit = self._sgr_cache.get(key)
-        if hit is not None:
-            return hit
-
-        parts: list[str] = []
-        if need_fg:
-            parts.append("39" if f[0] < 0 else f"38;2;{f[0]};{f[1]};{f[2]}")
-        if need_bg:
-            parts.append("49" if b[0] < 0 else f"48;2;{b[0]};{b[1]};{b[2]}")
-        seq = "\x1b[" + ";".join(parts) + "m" if parts else ""
-
-        # Frames reuse colours heavily, but an unbounded cache would grow without
-        # limit on noisy content.
-        if len(self._sgr_cache) < 8192:
-            self._sgr_cache[key] = seq
-        return seq
 
 
 class PlainWriter:
@@ -216,10 +271,6 @@ class PlainWriter:
         self._stream.write(text)
         self._stream.flush()
         self.bytes_written += len(text)
-
-
-def int_iter(a: np.ndarray):
-    return (int(x) for x in a)
 
 
 def _runs(cols: np.ndarray) -> list[tuple[int, int]]:
@@ -326,6 +377,9 @@ class Terminal:
         self._prev_winch = None
         self._entered = False
         self.resized = False
+        self._settled_size = self.size()
+        self._observed_size = self._settled_size
+        self._observed_at = 0.0
 
     # -- sizing ------------------------------------------------------------
 
@@ -338,11 +392,30 @@ class Terminal:
         return max(cols, 8), max(rows, 4)
 
     def take_resize(self) -> bool:
-        """Consume the resize flag; True if the window changed since last call."""
-        if self.resized:
-            self.resized = False
-            return True
-        return False
+        """True once the window has settled at a size different from the last one.
+
+        Polls rather than trusting SIGWINCH alone. The signal is not delivered
+        when the process has no controlling terminal, and a missed resize leaves
+        the picture permanently the wrong size -- so the signal is treated as a
+        hint that saves us a little latency, not as the mechanism.
+
+        Debounced, because a drag-resize fires a flood of events and tearing the
+        decoder down for each one stutters horribly.
+        """
+        self.resized = False
+        size = self.size()
+        if size == self._settled_size:
+            self._observed_size = size
+            return False
+        now = time.monotonic()
+        if size != self._observed_size:
+            self._observed_size = size
+            self._observed_at = now
+            return False
+        if now - self._observed_at < RESIZE_DEBOUNCE:
+            return False
+        self._settled_size = size
+        return True
 
     # -- lifecycle ---------------------------------------------------------
 
