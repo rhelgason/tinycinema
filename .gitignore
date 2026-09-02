@@ -1,0 +1,112 @@
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+.python-version
+
+# Tooling caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.pytype/
+.dmypy.json
+dmypy.json
+.tox/
+.nox/
+.hypothesis/
+htmlcov/
+.coverage
+.coverage.*
+coverage.xml
+*.cover
+.cache/
+
+# ---- Node (only if we add JS tooling for docs/demos) ----
+node_modules/
+npm-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# ---- tinycinema runtime artifacts ----
+# Downloaded/cached media from yt-dlp
+.cache/
+cache/
+.tinycinema/
+*.part
+*.ytdl
+
+# Recording + frame-dump output
+recordings/
+frames/
+*.cast
+profile.out
+*.prof
+
+# Sample media — keep the repo small. The only exception is a tiny checked-in
+# clip for integration tests; force-add it with `git add -f`.
+media/
+samples/
+*.mp4
+*.mkv
+*.webm
+*.mov
+*.avi
+*.m4v
+*.flv
+*.ts
+*.m4a
+*.mp3
+*.wav
+*.opus
+*.aac
+
+# Demo assets in docs/ ARE tracked (README needs them) — unignore them.
+!docs/**/*.mp4
+!docs/**/*.webm
+!docs/**/*.mov
+
+# ---- Editors / OS ----
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+Desktop.ini
+.idea/
+*.swp
+*.swo
+*~
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+
+# ---- Secrets / local config ----
+.env
+.env.*
+!.env.example
+*.local
