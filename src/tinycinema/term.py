@@ -45,8 +45,6 @@ SYNC_BEGIN = "\x1b[?2026h"  # DECSET 2026: don't present a half-drawn frame
 SYNC_END = "\x1b[?2026l"
 CLEAR = "\x1b[2J"
 SGR_RESET = "\x1b[0m"
-SGR_DEFAULT_FG = "\x1b[39m"
-SGR_DEFAULT_BG = "\x1b[49m"
 
 DEFAULT = -1  # sentinel in a CellGrid colour channel meaning "terminal default"
 
