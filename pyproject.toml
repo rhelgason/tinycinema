@@ -1,0 +1,49 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "tinycinema"
+version = "0.1.0.dev0"
+description = "Play video in your terminal, with sound."
+readme = "README.md"
+license = { file = "LICENSE" }
+authors = [{ name = "Ryan Helgason" }]
+requires-python = ">=3.11"
+keywords = ["terminal", "video", "ascii", "ansi", "cli", "player"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Multimedia :: Video :: Display",
+]
+dependencies = ["numpy>=1.24"]
+
+[project.optional-dependencies]
+youtube = ["yt-dlp>=2024.1.1"]
+dev = ["pytest>=7.4", "ruff>=0.4"]
+
+[project.scripts]
+tinycinema = "tinycinema.cli:main"
+tcin = "tinycinema.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/rhelgason/tinycinema"
+Source = "https://github.com/rhelgason/tinycinema"
+Issues = "https://github.com/rhelgason/tinycinema/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/tinycinema"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
