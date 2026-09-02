@@ -1,0 +1,108 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: ${{ matrix.os }} / py${{ matrix.python }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        python: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Install
+        run: pip install -e ".[dev]"
+
+      - name: Test
+        run: pytest -q
+
+      # The test suite deliberately avoids ffmpeg and a real tty, so these two
+      # cover what it can't: that the console script is wired up, and that piped
+      # output really is plain text.
+      - name: Smoke test
+        run: |
+          tinycinema --version
+          tinycinema --doctor || true   # exits 1 without ffmpeg, which is fine
+          tinycinema --demo --width 40 --height 12 --stats
+
+      - name: Piped output must contain no escape sequences
+        shell: bash
+        run: |
+          tinycinema --demo mandelbrot --width 40 --height 12 > frame.txt
+          python - <<'EOF'
+          # Python rather than grep -P: BSD grep on macOS has no -P.
+          text = open("frame.txt").read()
+          assert "\x1b" not in text, "escape sequences leaked into piped output"
+          lines = text.rstrip("\n").split("\n")
+          assert len(lines) == 12, f"expected 12 rows, got {len(lines)}"
+          assert all(len(x) == 40 for x in lines), "rows are not 40 cells wide"
+          print("piped output is clean")
+          EOF
+
+  playback:
+    name: real playback (ubuntu, ffmpeg)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - run: pip install -e ".[dev]"
+
+      - name: Decode an actual video
+        run: |
+          ffmpeg -y -loglevel error -f lavfi \
+            -i "testsrc2=size=320x180:rate=30:duration=2" \
+            -c:v libx264 -pix_fmt yuv420p /tmp/clip.mp4
+          tinycinema /tmp/clip.mp4 --once --width 60 --height 20 --mode ascii
+          tinycinema /tmp/clip.mp4 --once --width 60 --height 20 --mode halfblock \
+            > /dev/null
+          tinycinema /tmp/clip.mp4 --stats --width 60 --height 20 --fps 10
+
+      - name: --doctor reports a healthy setup
+        run: tinycinema --doctor
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install ruff
+      - run: ruff check src tests tools
+
+  assets:
+    name: demo assets are up to date
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e .
+      - name: Regenerate and diff
+        run: |
+          python tools/make_demo_assets.py
+          git diff --exit-code -- docs/ || {
+            echo "::error::docs/ is stale -- run python tools/make_demo_assets.py"
+            exit 1
+          }

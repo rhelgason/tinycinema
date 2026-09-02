@@ -3,6 +3,10 @@
 Braindump of the whole idea before writing code. Nothing here is final; it's the
 menu we order from. Decisions that are actually locked in are marked **DECIDED**.
 
+> **Status:** Phases 0 and 1 are built. Section 15 at the bottom records what
+> the plan below got right, what it got wrong, and what only showed up once
+> real frames were moving.
+
 ---
 
 ## 1. What it is
@@ -477,3 +481,70 @@ alias `tcin`. Tagline candidates:
 Other names considered, kept here for a future rename or a sibling project:
 `asciiplex`, `termflix`, `catflix`, `pixelvomit`, `glyphstream`, `cellophane`,
 `ANSItheater`, `moviecat`, `vt100-video`, `blockbuster` (this one is very good).
+
+---
+
+## 15. What Phases 0–1 actually taught us
+
+Written after the fact. The plan above was mostly right; these are the places it
+wasn't, and the things that only showed up with real frames moving.
+
+### The plan held up
+
+- **Half-block as the default** is exactly as good as hoped.
+- **Audio-as-master-clock shaped correctly.** Phase 1 uses a wall clock, but the
+  loop is written against a single `now()`, so Phase 2 replaces one method call.
+- **The diffed writer is the whole ballgame.** Measured at 160×48: 38.6 KB/frame
+  for half-block, 0.8 KB/frame for ascii. A naive repaint would be ~250 KB.
+- **Testing works out better than expected.** 159 tests, none needing video or a
+  terminal. Golden byte strings for the writer, exact grids for the renderers,
+  and a fake clock for the timing loop.
+
+### What the plan missed
+
+**Pixel aspect leaks past the renderer.** Section 3 has the aspect maths, but
+treats it as a rendering concern. It isn't — the *decoder* has to know, because
+ffmpeg does the scaling. `force_original_aspect_ratio=decrease` assumes square
+pixels, so ascii mode came out squeezed into half the width and stretched to
+twice the height. Fixed by having each renderer publish `pixel_aspect` and
+passing it into `open()`, where the fit is computed in the filtergraph from
+ffmpeg's `dar` variable. Doing it in-graph rather than in Python also means it
+still works when ffprobe is missing and we don't know the source dimensions.
+
+**numpy scalar indexing, not bytes, was the encoder bottleneck.** Section 4 is
+all about byte volume, and byte volume does matter — but the first cut spent
+15 ms/frame in Python before writing anything, because `int(fg[r, c, 0])` costs
+~2 µs and there are 7680 cells. Two fixes got it to 10 ms: pack each cell's two
+colours into one `int64` (so the diff and the run-splitting are single vectorised
+comparisons and the SGR cache keys on a plain int), and iterate *spans of
+constant colour* rather than cells, bulk-converting with `tolist()` first. The
+neat trick: uint32 codepoints already *are* UTF-32, so a row of characters
+reinterprets as a Python string via `.view(f"U{cols}")` with no per-char `chr()`.
+
+**SIGWINCH is not sufficient for resize.** It is never delivered to a process
+with no controlling terminal, and a missed resize leaves the picture permanently
+wrong. Now the size is polled every frame (an ioctl, ~1 µs) and the signal is
+just a latency hint. The debounce the plan called for turned out to be essential:
+a 20-event drag storm collapses to one pipeline restart.
+
+**Zero frames is ambiguous.** ffmpeg producing nothing means failure at the start
+of a stream but plain EOF after a seek — and without ffprobe there's no duration
+to clamp the seek target against, so seeking past the end is routine, not
+exotic.
+
+**Queued keystrokes need to survive a restart.** Anything that changes the cell
+grid (mode switch, HUD toggle, seek) tears down and reopens the pipeline. The
+first cut returned from the key handler immediately and dropped whatever was
+still queued, so pressing `r` three times advanced one mode.
+
+### Still open
+
+- 10 ms/frame for a fully-changing half-block frame is a third of the 30 fps
+  budget. The remaining cost is building colour escapes for cells whose colour
+  the cache has never seen — unavoidable for photographic content in Python, so
+  this is the natural place for Cython or a Rust `render/`.
+- Braille needs adaptive thresholding. A fixed cutoff plus dithering turns smooth
+  gradients into speckle; the demo assets need `--contrast 6` to look right,
+  which real content shouldn't have to.
+- No ffprobe means no duration, so no progress bar and no seek clamping. Worth a
+  fallback that estimates duration from the container.
