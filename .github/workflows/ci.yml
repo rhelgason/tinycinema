@@ -159,6 +159,10 @@ jobs:
       - run: pip install ruff
       - run: ruff check src tests tools
 
+  # Not about publishing. `pip install git+https://...` -- the actual install
+  # method -- builds a wheel through this exact path, so a packaging mistake
+  # (a module missing from the wheel, a broken console script) would break
+  # installs for real. This is the job that catches it.
   package:
     name: package builds and installs
     runs-on: ubuntu-latest

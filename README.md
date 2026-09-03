@@ -17,8 +17,8 @@ Play videos — local files or YouTube links — directly in your terminal, with
 > [!NOTE]
 > **Feature complete through Phase 5.** Local files, YouTube links, directories
 > and playlists all play with sound, in sync, across five character modes and
-> three inline-image protocols. Not on PyPI yet. The full design write-up,
-> including everything considered and rejected, is in [DESIGN.md](DESIGN.md).
+> three inline-image protocols. The full design write-up, including everything
+> considered and rejected, is in [DESIGN.md](DESIGN.md).
 
 ---
 
@@ -101,13 +101,22 @@ Two independently coloured pixels per character cell, via `▀`.
 
 ## Install
 
-Not on PyPI yet. From source:
+```bash
+uv tool install "git+https://github.com/rhelgason/tinycinema"
+# or
+pipx install "git+https://github.com/rhelgason/tinycinema"
+```
+
+Add the YouTube support with `"tinycinema[youtube] @ git+https://..."`, or skip
+it if you only play local files.
+
+For hacking on it:
 
 ```bash
 git clone https://github.com/rhelgason/tinycinema.git
 cd tinycinema
 python -m venv .venv && source .venv/bin/activate
-pip install -e ".[youtube]"     # drop [youtube] if you only play local files
+pip install -e ".[dev]"
 ```
 
 ### Requirements
@@ -292,12 +301,15 @@ with video landing within **±1 ms** of the audio clock (drop threshold: 50 ms).
 - [x] **Phase 3** — YouTube URLs via yt-dlp, with an LRU download cache
 - [x] **Phase 4** — frame stepping, volume, playlists, `--record`
 - [x] **Phase 5** — Kitty/iTerm2/sixel inline images
-- [ ] **Next** — PyPI release
+
+Install straight from the repo; there is no PyPI release and no particular
+reason for one while this is a personal project. `.github/workflows/release.yml`
+is written and dormant — it only fires on a `v*` tag — if that ever changes.
 
 ## Development
 
 ```bash
-pytest                              # 351 tests, no video, tty, audio or network
+pytest                              # 357 tests, no video, tty, audio or network
 python tools/make_demo_assets.py    # regenerate the README images
 tinycinema --demo --stats           # quick smoke test
 ```

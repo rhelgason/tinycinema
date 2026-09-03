@@ -776,4 +776,17 @@ Cycling into sixel on a terminal that cannot decode it sprays garbage.
   entries or a smarter grouping would help; 66fps is enough for now.
 - Live volume still costs an audio gap. A `sounddevice` backend would fix that
   and the status-line parsing in one go, at the cost of a PortAudio dependency.
-- No PyPI release yet.
+
+### Not doing: a PyPI release
+
+Deliberately shelved. Publishing would buy a shorter install string, search
+visibility, and version resolution for anything depending on this -- and none of
+those apply to a personal project nobody is installing. `pip install
+git+https://github.com/rhelgason/tinycinema` already works in one command, and a
+published version can only be yanked, never replaced. The one real argument is
+reserving the name, which is not worth much unless someone else wants it.
+
+`.github/workflows/release.yml` is written and dormant; it fires only on a `v*`
+tag. The CI `package` job stays regardless, and matters more without PyPI rather
+than less: `pip install git+https://...` builds a wheel through exactly that
+path, so a packaging mistake breaks the real install method.
