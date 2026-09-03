@@ -17,6 +17,7 @@ orders of magnitude:
 from __future__ import annotations
 
 import atexit
+import contextlib
 import os
 import re
 import shutil
@@ -258,6 +259,51 @@ class FrameWriter:
         return "".join(out)
 
 
+class ImageWriter:
+    """Paints inline-image payloads (kitty / iTerm2 / sixel).
+
+    There is nothing to diff here: the terminal owns the pixels once we hand
+    them over, and every protocol replaces the whole picture each frame. So this
+    is a much simpler writer -- one payload out, plus an optional HUD line drawn
+    underneath with ordinary escapes.
+    """
+
+    def __init__(self, stream=None, *, synchronized: bool = True, recorder=None) -> None:
+        self._stream = stream if stream is not None else sys.stdout
+        self._synchronized = synchronized
+        self.recorder = recorder
+        self.bytes_written = 0
+        self._last_hud = ""
+
+    def invalidate(self) -> None:
+        self._last_hud = ""
+
+    def draw_image(self, payload: str, hud: str = "", hud_row: int = 0) -> None:
+        parts = []
+        if self._synchronized:
+            parts.append(SYNC_BEGIN)
+        parts.append(payload)
+        if hud:
+            fg, bg = (200, 200, 200), (24, 24, 32)
+            parts.append(
+                f"\x1b[{hud_row + 1};1H"
+                f"\x1b[38;2;{fg[0]};{fg[1]};{fg[2]};48;2;{bg[0]};{bg[1]};{bg[2]}m"
+                f"{hud}\x1b[0m"
+            )
+            self._last_hud = hud
+        if self._synchronized:
+            parts.append(SYNC_END)
+        out = "".join(parts)
+        self._stream.write(out)
+        self._stream.flush()
+        self.bytes_written += len(out)
+        if self.recorder is not None:
+            self.recorder.write(out)
+
+    def draw(self, grid: CellGrid) -> None:  # pragma: no cover - interface parity
+        raise TypeError("ImageWriter draws payloads, not cell grids")
+
+
 class PlainWriter:
     """Unstyled output for pipes and redirects. No escapes, no cursor games."""
 
@@ -305,6 +351,19 @@ class Capabilities:
     iterm: bool
     term: str
     term_program: str
+    sixel: bool = False
+
+    @property
+    def image_modes(self) -> list[str]:
+        """Inline-image protocols this terminal claims to support, best first."""
+        modes = []
+        if self.kitty:
+            modes.append("kitty")
+        if self.iterm:
+            modes.append("iterm")
+        if self.sixel:
+            modes.append("sixel")
+        return modes
 
     @property
     def color_depth(self) -> str:
@@ -315,7 +374,14 @@ class Capabilities:
         return "none"
 
     def best_mode(self) -> str:
-        """Pick the nicest render mode this terminal can actually handle."""
+        """Pick the nicest *character* mode this terminal can handle.
+
+        Deliberately never returns an inline-image mode, even when one is
+        available. The design notes originally had `auto` climb all the way to
+        kitty/sixel, but the whole point of this tool is video rendered out of
+        characters -- silently swapping in a bitmap would quietly defeat it.
+        Image modes are one flag away and --doctor advertises them.
+        """
         if not self.is_tty:
             return "ascii"
         if self.unicode and (self.truecolor or self.color256):
@@ -343,7 +409,8 @@ def detect_capabilities(stream=None) -> Capabilities:
     unicode_ok = "utf" in encoding or "utf" in os.environ.get("LANG", "").lower()
 
     kitty = "kitty" in term.lower() or bool(os.environ.get("KITTY_WINDOW_ID"))
-    iterm = term_program == "iTerm.app"
+    iterm = term_program in ("iTerm.app", "WezTerm")
+    sixel = detect_sixel(stream) if is_tty else False
 
     if os.environ.get("NO_COLOR"):
         truecolor = color256 = False
@@ -355,9 +422,68 @@ def detect_capabilities(stream=None) -> Capabilities:
         unicode=unicode_ok,
         kitty=kitty,
         iterm=iterm,
+        sixel=sixel,
         term=term or "(unset)",
         term_program=term_program or "(unset)",
     )
+
+
+#: Attribute 4 in a Primary Device Attributes reply means sixel support.
+_DA_TIMEOUT = 0.25
+
+
+def detect_sixel(stream=None) -> bool:
+    """Ask the terminal directly, via a Primary Device Attributes query.
+
+    There is no environment variable for sixel, so this writes `ESC [ c` and
+    reads the reply. Terminals that don't answer simply time out -- hence the
+    short deadline, and hence doing this once at startup rather than ever again.
+    """
+    if os.environ.get("TINYCINEMA_SIXEL"):
+        return os.environ["TINYCINEMA_SIXEL"] not in ("0", "", "no")
+    stream = stream if stream is not None else sys.stdout
+    try:
+        if not stream.isatty() or not sys.stdin.isatty():
+            return False
+        fd = sys.stdin.fileno()
+    except (AttributeError, ValueError, OSError):
+        return False
+
+    import select
+
+    try:
+        saved = termios.tcgetattr(fd)
+    except (termios.error, ValueError, OSError):
+        return False
+    try:
+        tty.setcbreak(fd)
+        stream.write("\x1b[c")
+        stream.flush()
+        reply = b""
+        deadline = time.monotonic() + _DA_TIMEOUT
+        while time.monotonic() < deadline:
+            remaining = deadline - time.monotonic()
+            ready, _, _ = select.select([fd], [], [], max(remaining, 0))
+            if not ready:
+                break
+            chunk = os.read(fd, 64)
+            if not chunk:
+                break
+            reply += chunk
+            if b"c" in chunk:  # the reply terminates with 'c'
+                break
+    except (OSError, ValueError, termios.error):
+        return False
+    finally:
+        with contextlib.suppress(termios.error, ValueError, OSError):
+            termios.tcsetattr(fd, termios.TCSADRAIN, saved)
+
+    # Reply looks like ESC [ ? 62 ; 4 ; 6 c -- attribute 4 is sixel.
+    text = reply.decode("ascii", "ignore")
+    if "?" not in text:
+        return False
+    body = text.split("?", 1)[1].split("c", 1)[0]
+    return "4" in body.split(";")
 
 
 # ---------------------------------------------------------------------------

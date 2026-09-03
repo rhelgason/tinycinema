@@ -29,7 +29,7 @@ from .audio import Clock, WallClock
 from .keys import KeyReader
 from .render import RenderOptions
 from .sources import FrameSource
-from .term import DEFAULT, CellGrid, FrameWriter, PlainWriter, Terminal
+from .term import DEFAULT, CellGrid, FrameWriter, ImageWriter, PlainWriter, Terminal
 
 Restart = Literal["quit", "eof", "resize", "reopen", "seek", "next", "prev"]
 
@@ -123,13 +123,24 @@ class Player:
             from .record import FrameDumper
 
             self.dumper = FrameDumper(opts.frames_dir)
-        self.writer = (
-            FrameWriter(recorder=self.recorder)
-            if self.is_tty
-            else PlainWriter(recorder=self.recorder)
-        )
         self.keys = KeyReader()
         self.renderer = render_mod.create(opts.mode, opts.render)
+        if not self.is_tty:
+            self.writer = PlainWriter(recorder=self.recorder)
+        elif self.renderer.is_image:
+            self.writer = ImageWriter(recorder=self.recorder)
+        else:
+            self.writer = FrameWriter(recorder=self.recorder)
+
+        # `r` should only offer modes this terminal can actually display --
+        # cycling into sixel on a terminal that can't decode it would spray
+        # garbage across the screen.
+        caps = terminal.caps
+        self._mode_cycle = render_mod.cell_modes() + [
+            m for m in render_mod.image_modes() if m in caps.image_modes
+        ]
+        if opts.mode not in self._mode_cycle:
+            self._mode_cycle.append(opts.mode)
 
         self._position = max(0.0, opts.start)
         self._paused = False
@@ -262,12 +273,17 @@ class Player:
     # -- painting ----------------------------------------------------------
 
     def _paint(self, rgb, pts: float, cols: int, rows: int, video_rows: int) -> None:
-        grid = self.renderer.render(rgb)
-        if self._hud_enabled and video_rows < rows:
-            grid = self._compose_hud(grid, pts, cols, rows, video_rows)
-        self.writer.draw(grid)
-        if self.dumper is not None:
-            self.dumper.write(grid.to_text())
+        if self.renderer.is_image:
+            payload = self.renderer.encode_image(rgb, cols, video_rows)
+            hud = self._hud_text(pts, cols) if self._hud_enabled and video_rows < rows else ""
+            self.writer.draw_image(payload, hud, hud_row=rows - 1)
+        else:
+            grid = self.renderer.render(rgb)
+            if self._hud_enabled and video_rows < rows:
+                grid = self._compose_hud(grid, pts, cols, rows, video_rows)
+            self.writer.draw(grid)
+            if self.dumper is not None:
+                self.dumper.write(grid.to_text())
         self.stats.rendered += 1
         self._recent.append(time.perf_counter())
 
@@ -448,10 +464,18 @@ class Player:
         return "seek"
 
     def _cycle_mode(self, step: int) -> Restart:
-        modes = render_mod.available_modes()
+        modes = self._mode_cycle
         i = (modes.index(self.renderer.name) + step) % len(modes)
+        was_image = self.renderer.is_image
         self.renderer = render_mod.create(modes[i], self.opts.render)
         self.opts.mode = modes[i]
+        if self.is_tty and self.renderer.is_image != was_image:
+            # Cells and bitmaps need different writers entirely.
+            self.writer = (
+                ImageWriter(recorder=self.recorder)
+                if self.renderer.is_image
+                else FrameWriter(recorder=self.recorder)
+            )
         self._notify(f"mode: {modes[i]}")
         return "reopen"  # pixel dimensions differ per mode
 

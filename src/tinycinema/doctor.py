@@ -105,10 +105,11 @@ def run_doctor() -> int:
     lines.append(f"  {_mark(caps.truecolor, warn=True)} color       {caps.color_depth}")
     lines.append(f"  {_mark(caps.unicode, warn=True)} unicode     {caps.unicode}")
     lines.append(f"    · size        {cols}x{rows} cells")
-    if caps.kitty:
-        lines.append("    · kitty graphics protocol detected (Phase 5)")
-    if caps.iterm:
-        lines.append("    · iTerm2 inline images detected (Phase 5)")
+    supported = caps.image_modes
+    lines.append(
+        f"  {_mark(bool(supported), warn=True)} images      "
+        + (", ".join(supported) if supported else "none detected")
+    )
     if os.environ.get("SSH_CONNECTION"):
         lines.append(f"  {WARN} ssh         detected -- expect to need a lower --fps")
     lines.append("")
@@ -121,9 +122,18 @@ def run_doctor() -> int:
         lines.append("    · backend     none -- video will sync to a wall clock")
     lines.append("")
 
+    from .render import cell_modes, image_modes
+
     lines.append("\x1b[1mRendering\x1b[0m")
-    lines.append(f"    · modes       {', '.join(available_modes())}")
+    lines.append(f"    · text modes  {', '.join(cell_modes())}")
+    lines.append(f"    · image modes {', '.join(image_modes())}")
     lines.append(f"    · auto picks  {caps.best_mode()}")
+    if supported:
+        lines.append(
+            f"    · try         tinycinema clip.mp4 --mode {supported[0]} --fps 15"
+        )
+    else:
+        lines.append("    · image modes need kitty, iTerm2/WezTerm, or a sixel terminal")
     lines.append("")
 
     lines.append("\x1b[1mGlyph check\x1b[0m  (all four rows should look distinct)")

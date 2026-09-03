@@ -42,6 +42,9 @@ class Renderer:
     #: pixels per cell, (horizontal, vertical)
     px_per_cell: ClassVar[tuple[int, int]] = (1, 1)
 
+    #: True for modes that emit a bitmap escape rather than a CellGrid.
+    is_image: ClassVar[bool] = False
+
     opts: RenderOptions = field(default_factory=RenderOptions)
 
     #: Terminal cells are about twice as tall as they are wide. A renderer whose

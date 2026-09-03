@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 
 from tinycinema import render as render_mod
-from tinycinema.render import RenderOptions, available_modes, create
+from tinycinema.render import RenderOptions, available_modes, cell_modes, create
 from tinycinema.term import DEFAULT
 
 HALFBLOCK = 0x2580
@@ -12,7 +12,7 @@ def solid(h, w, rgb):
     return np.broadcast_to(np.array(rgb, np.uint8), (h, w, 3)).copy()
 
 
-@pytest.mark.parametrize("mode", available_modes())
+@pytest.mark.parametrize("mode", cell_modes())
 def test_grid_shape_matches_requested_cells(mode):
     """The contract: pixel_size(cols, rows) in -> exactly (rows, cols) cells out."""
     r = create(mode)
@@ -22,7 +22,7 @@ def test_grid_shape_matches_requested_cells(mode):
     assert grid.shape == (rows, cols)
 
 
-@pytest.mark.parametrize("mode", available_modes())
+@pytest.mark.parametrize("mode", cell_modes())
 def test_colour_planes_have_matching_shape(mode):
     r = create(mode)
     w, h = r.pixel_size(20, 6)
@@ -32,7 +32,7 @@ def test_colour_planes_have_matching_shape(mode):
     assert grid.chars.dtype == np.uint32
 
 
-@pytest.mark.parametrize("mode", available_modes())
+@pytest.mark.parametrize("mode", cell_modes())
 def test_render_accepts_readonly_input(mode):
     """Frames arrive from np.frombuffer over a pipe, so they are not writeable."""
     r = create(mode)
@@ -142,3 +142,11 @@ def test_registry_names_match_class_attributes():
     for name in available_modes():
         assert create(name).name == name
     assert "halfblock" in render_mod.available_modes()
+
+
+def test_cell_and_image_modes_partition_the_registry():
+    from tinycinema.render import image_modes
+
+    assert set(cell_modes()) | set(image_modes()) == set(available_modes())
+    assert not set(cell_modes()) & set(image_modes())
+    assert set(image_modes()) == {"kitty", "iterm", "sixel"}

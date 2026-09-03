@@ -85,6 +85,42 @@ def caps(**kw):
     return Capabilities(**{**base, **kw})
 
 
+def test_auto_never_picks_an_image_mode():
+    """The tool renders video as characters; auto-selecting a bitmap would
+    silently defeat the entire premise. Image modes stay opt-in."""
+    from tinycinema.render import image_modes
+
+    for kw in ({}, {"kitty": True}, {"iterm": True}, {"sixel": True}):
+        assert caps(truecolor=True, **kw).best_mode() not in image_modes()
+
+
+def test_image_modes_are_reported_best_first():
+    assert caps(kitty=True, iterm=True, sixel=True).image_modes == [
+        "kitty",
+        "iterm",
+        "sixel",
+    ]
+    assert caps().image_modes == []
+
+
+def test_sixel_detection_can_be_overridden(monkeypatch):
+    from tinycinema.term import detect_sixel
+
+    monkeypatch.setenv("TINYCINEMA_SIXEL", "1")
+    assert detect_sixel()
+    monkeypatch.setenv("TINYCINEMA_SIXEL", "0")
+    assert not detect_sixel()
+
+
+def test_sixel_query_is_skipped_when_not_a_tty(monkeypatch):
+    """The DA query writes to the terminal and reads a reply; on a pipe that
+    would emit junk into the output and block for the timeout."""
+    from tinycinema.term import detect_sixel
+
+    monkeypatch.delenv("TINYCINEMA_SIXEL", raising=False)
+    assert not detect_sixel()
+
+
 def test_best_mode_ladder():
     assert caps(truecolor=True, color256=True).best_mode() == "halfblock"
     assert caps(color256=True).best_mode() == "halfblock"
