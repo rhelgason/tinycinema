@@ -341,7 +341,7 @@ is written and dormant — it only fires on a `v*` tag — if that ever changes.
 python tools/verify.py              # first-run check on real hardware
 python tools/verify.py "https://youtu.be/..."   # ...including a real fetch
 
-pytest                              # 431 tests, no video, tty, audio or network
+pytest                              # 453 tests, no video, ffmpeg, audio or network
 python tools/make_demo_assets.py    # regenerate the README images
 tinycinema --demo --stats           # quick smoke test
 ```
@@ -352,8 +352,9 @@ real ffmpeg decode, every render mode, timed playback under a real pty, then a
 yt-dlp fetch — so a failure tells you which layer broke rather than just that
 something did.
 
-The test suite itself needs no media, terminal, sound card or network
-connection: the writer is verified with golden byte strings, the renderers with
+The test suite itself needs no media, ffmpeg, sound card or network connection —
+85% coverage, and the parts that genuinely need something on the other end get a
+committed fake ffplay, `os.pipe()` and `pty.openpty()` rather than being skipped: the writer is verified with golden byte strings, the renderers with
 exact cell grids, the image protocols by decoding their payloads back to pixels,
 both clocks by hand-cranking them, and `ffmpeg -i` parsing against captured real
 output in `tests/fixtures/`. yt-dlp is stubbed, and the cache is tested against
