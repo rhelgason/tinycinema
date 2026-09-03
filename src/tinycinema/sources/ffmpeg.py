@@ -14,8 +14,6 @@ Two subprocess hazards worth naming, because both are silent hangs:
 from __future__ import annotations
 
 import json
-import os
-import shutil
 import subprocess
 import threading
 from collections import deque
@@ -24,45 +22,17 @@ from pathlib import Path
 
 import numpy as np
 
+from ..binaries import (
+    FFmpegMissingError,
+    ffmpeg_path,
+    ffprobe_path,
+    require_ffmpeg,
+)
 from .base import Frame, FrameSource, MediaInfo, fit_box
-
-
-class FFmpegMissingError(RuntimeError):
-    pass
 
 
 class DecodeError(RuntimeError):
     pass
-
-
-def _resolve(name: str, env_var: str) -> str | None:
-    """PATH lookup, overridable -- people build their own ffmpeg all the time."""
-    override = os.environ.get(env_var)
-    if override:
-        if os.path.isfile(override) and os.access(override, os.X_OK):
-            return override
-        return shutil.which(override)
-    return shutil.which(name)
-
-
-def ffmpeg_path() -> str | None:
-    return _resolve("ffmpeg", "TINYCINEMA_FFMPEG")
-
-
-def ffprobe_path() -> str | None:
-    return _resolve("ffprobe", "TINYCINEMA_FFPROBE")
-
-
-def require_ffmpeg() -> str:
-    path = ffmpeg_path()
-    if not path:
-        raise FFmpegMissingError(
-            "ffmpeg not found on PATH.\n"
-            "  macOS:  brew install ffmpeg\n"
-            "  Debian: sudo apt install ffmpeg\n"
-            "Run `tinycinema --doctor` for a full check."
-        )
-    return path
 
 
 def _parse_rate(value: str | None) -> float | None:

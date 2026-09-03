@@ -12,7 +12,7 @@ import sys
 
 from . import __version__
 from .render import available_modes
-from .sources.ffmpeg import ffmpeg_path, ffprobe_path
+from .binaries import ffmpeg_path, ffplay_path, ffprobe_path
 from .term import detect_capabilities
 
 OK = "\x1b[32m✓\x1b[0m"
@@ -72,6 +72,10 @@ def run_doctor() -> int:
     fp = ffprobe_path()
     lines.append(f"  {_mark(bool(fp), warn=True)} ffprobe     {_version_of(fp)}")
 
+    play = ffplay_path()
+    note = _version_of(play) if play else "not installed -- playback will be silent"
+    lines.append(f"  {_mark(bool(play), warn=True)} ffplay      {note}")
+
     ytdlp = shutil.which("yt-dlp")
     try:
         import yt_dlp  # noqa: F401
@@ -103,6 +107,13 @@ def run_doctor() -> int:
     lines.append("")
 
     # -- rendering ---------------------------------------------------------
+    lines.append("\x1b[1mAudio\x1b[0m")
+    if play:
+        lines.append("    · backend     ffplay (audio is the master clock)")
+    else:
+        lines.append("    · backend     none -- video will sync to a wall clock")
+    lines.append("")
+
     lines.append("\x1b[1mRendering\x1b[0m")
     lines.append(f"    · modes       {', '.join(available_modes())}")
     lines.append(f"    · auto picks  {caps.best_mode()}")

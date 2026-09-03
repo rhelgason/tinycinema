@@ -15,11 +15,11 @@ Play videos — local files or YouTube links — directly in your terminal, with
 ---
 
 > [!NOTE]
-> **Video plays. Audio doesn't yet.** Local files and generated test patterns
-> render in sync against a wall clock, with seeking, pause, live mode switching
-> and resize handling. Audio is Phase 2 and YouTube is Phase 3 — see the
-> [roadmap](#roadmap). The full design write-up, including everything considered
-> and rejected, is in [DESIGN.md](DESIGN.md).
+> **Video and audio both play, in sync.** Local files and generated test
+> patterns render against the audio device's real playback position, with
+> seeking, pause, live mode switching and resize handling. YouTube is Phase 3 —
+> see the [roadmap](#roadmap). The full design write-up, including everything
+> considered and rejected, is in [DESIGN.md](DESIGN.md).
 
 ---
 
@@ -118,6 +118,7 @@ pip install -e ".[dev]"
 | **Python 3.11+** | |
 | **numpy** | installed automatically |
 | **ffmpeg** | required to play actual media (`--demo` works without it) |
+| **ffplay** | ships with ffmpeg; without it playback is silent |
 | **A truecolor terminal** | recommended; degrades to 256-colour and mono |
 
 ```bash
@@ -126,7 +127,12 @@ sudo apt install ffmpeg      # Debian / Ubuntu
 ```
 
 If your ffmpeg lives somewhere unusual, point at it with `TINYCINEMA_FFMPEG`
-(and `TINYCINEMA_FFPROBE`).
+(and `TINYCINEMA_FFPROBE`, `TINYCINEMA_FFPLAY`).
+
+Wondering why a "write your own video player" project shells out to ffmpeg at
+all? [DESIGN.md §16](DESIGN.md) answers that in full — short version: ffmpeg
+does demux and decode, and touches none of the pixel-to-glyph mapping, terminal
+writing or A/V sync.
 
 Run `tinycinema --doctor` to check your setup, see which render modes your
 terminal supports, and eyeball a glyph and colour test.
@@ -138,10 +144,11 @@ terminal supports, and eyeball a glyph and colour test.
 tinycinema --demo
 tinycinema --demo mandelbrot
 
-# a local file
+# a local file, with sound
 tinycinema clip.mp4
 tinycinema clip.mp4 --mode braille --contrast 3
 tinycinema clip.mp4 --start 1:30 --loop
+tinycinema clip.mp4 --no-audio --volume 50
 
 # a single frame — thumbnails for scripts
 tinycinema clip.mp4 --once --start 00:01:30
@@ -176,6 +183,9 @@ Built-in test patterns: `ball`, `plasma`, `bars`, `mandelbrot`.
 --gamma / --contrast / --brightness
 --dither          none | ordered
 --threshold F     on/off cutoff for braille mode
+--no-audio        play silently (video still syncs to a wall clock)
+--volume 0-100
+--audio-backend   auto | ffplay | none
 --start TIME      seconds, MM:SS or HH:MM:SS
 --loop            repeat forever
 --once            render one frame and exit
@@ -189,7 +199,7 @@ Full list: `tinycinema --help`.
 ## How it works
 
 ```
-source ──► resolve ──► ffmpeg demux/decode ──┬──► audio sink ──► 🔊   (Phase 2)
+source ──► resolve ──► ffmpeg demux/decode ──┬──► audio sink ──► 🔊
 (file/URL)                                   │        │
                                              │        └── playback position = the clock
                                              │                      │
@@ -213,7 +223,15 @@ into half the width and stretches it to twice the height.
 dropped video frame almost never. So audio plays uninterrupted and video chases
 it, dropping any frame that would land more than ~1.5 frame intervals late. Never
 accumulate debt: rendering every frame late is far worse than rendering most on
-time. (Phase 1 uses a wall clock in the same shape, so Phase 2 swaps one method.)
+time.
+
+The loop asks one question per frame — *what time is it in this movie?* — and the
+answer comes from the audio device's real position, read out of ffplay's status
+output and interpolated between reports. Two details make it feel right: video
+**waits** for the device to actually start (so they begin aligned rather than
+audio arriving 250 ms late), and the timeline is monotonic, so a late report
+stalls it rather than rewinding frames you have already seen. If audio never
+starts, it degrades to a wall clock and keeps playing rather than freezing.
 
 **3. Only repaint what changed.** A naive full-colour repaint of a 200×50 grid is
 ~420 KB per frame — 12.6 MB/s at 30 fps, which chokes most terminals and is
@@ -227,28 +245,29 @@ Packing each cell's two colours into a single `int64` makes the diff one
 vectorised comparison, and since uint32 codepoints *are* UTF-32, a row of
 characters reinterprets as a Python string via `.view()` for free.
 
-Measured at 160×48 on a 30 fps source: **149/149 frames, 30.1 fps, zero drops.**
+Measured at 160×48 on a 30 fps source: **149/149 frames, 30.1 fps, zero drops**,
+with video landing within **±1 ms** of the audio clock (drop threshold: 50 ms).
 
 ## Roadmap
 
 - [x] **Phase 0** — project skeleton, `--doctor`, generated test patterns
 - [x] **Phase 1** — silent playback of local files, seeking, HUD, resize handling
-- [ ] **Phase 2** — audio + A/V sync 🎯 _the good part_
-- [ ] **Phase 3** — YouTube URLs via yt-dlp, with a local cache
+- [x] **Phase 2** — audio + A/V sync
+- [ ] **Phase 3** — YouTube URLs via yt-dlp, with a local cache 🎯 _next_
 - [ ] **Phase 4** — frame stepping, volume, playlists, `--record`
 - [ ] **Phase 5** — Kitty/iTerm2/sixel inline images, PyPI release
 
 ## Development
 
 ```bash
-pytest                              # 159 tests, no video or tty required
+pytest                              # 204 tests, no video, tty or audio needed
 python tools/make_demo_assets.py    # regenerate the README images
 tinycinema --demo --stats           # quick smoke test
 ```
 
-The test suite deliberately needs no media and no terminal: the writer is
-verified with golden byte strings, the renderers with exact cell grids, and the
-timing loop against a fake clock.
+The test suite deliberately needs no media, terminal or sound card: the writer
+is verified with golden byte strings, the renderers with exact cell grids, and
+both the timing loop and the audio clock against hand-cranked clocks.
 
 ## Contributing
 

@@ -1,12 +1,18 @@
 """The playback loop -- decode, time, render, paint.
 
-Phase 1 is silent, so a monotonic wall clock is the timeline. Phase 2 swaps that
-for the audio sink's playback position without changing the shape of this loop:
-`_now()` becomes `audio.position()` and everything else stays put.
+The loop asks the clock one question per frame ("what time is it in this
+movie?") and everything follows from the answer. That clock is the audio
+device's real playback position when there is audio, and elapsed wall time when
+there isn't; the loop cannot tell the difference and doesn't need to.
 
 The rule that makes playback feel right: never accumulate debt. If we are behind
 the clock, drop the frame and move on. Rendering every frame late is far worse
 than rendering most frames on time.
+
+Restarting the pipeline is how every size- or position-change is handled, but
+audio is deliberately *not* restarted for a resize or a mode switch -- only a
+seek does that. Tearing down the audio device because someone dragged their
+window corner would be an audible click for no reason.
 """
 
 from __future__ import annotations
@@ -19,12 +25,16 @@ from typing import Literal
 import numpy as np
 
 from . import render as render_mod
+from .audio import Clock, WallClock
 from .keys import KeyReader
 from .render import RenderOptions
 from .sources import FrameSource
 from .term import DEFAULT, CellGrid, FrameWriter, PlainWriter, Terminal
 
-Restart = Literal["quit", "eof", "resize", "reopen", "loop"]
+Restart = Literal["quit", "eof", "resize", "reopen", "seek"]
+
+#: Restart reasons that only change the *picture*, so audio keeps playing.
+VIDEO_ONLY_RESTARTS = ("resize", "reopen")
 
 #: Behind by more than this many frame intervals -> drop rather than render late.
 DROP_AFTER_FRAMES = 1.5
@@ -49,6 +59,7 @@ class PlaybackOptions:
     stats: bool = False
     width: int | None = None
     height: int | None = None
+    audio: bool = True
 
 
 @dataclass
@@ -65,10 +76,17 @@ class Stats:
 
 
 class Player:
-    def __init__(self, source: FrameSource, terminal: Terminal, opts: PlaybackOptions):
+    def __init__(
+        self,
+        source: FrameSource,
+        terminal: Terminal,
+        opts: PlaybackOptions,
+        clock: Clock | None = None,
+    ):
         self.source = source
         self.term = terminal
         self.opts = opts
+        self.clock = clock if clock is not None else WallClock()
         self.stats = Stats()
 
         self.is_tty = terminal.caps.is_tty
@@ -78,9 +96,11 @@ class Player:
 
         self._position = max(0.0, opts.start)
         self._paused = False
-        self._origin = 0.0  # perf_counter value corresponding to position 0
         self._recent = deque(maxlen=30)  # draw timestamps, for the live fps read-out
         self._pending_keys: deque[str] = deque()
+        #: Should the next pipeline restart also restart audio? True on the
+        #: first pass and after a seek; False for resize/mode changes.
+        self._restart_audio = True
         self._message = ""
         self._message_until = 0.0
 
@@ -94,11 +114,15 @@ class Player:
                 if reason in ("quit", "eof"):
                     if reason == "eof" and self.opts.loop and not self.opts.once:
                         self._position = 0.0
+                        self._restart_audio = True
                         continue
                     break
-                # resize / reopen / seek: rebuild the pipeline at the current spot
+                # Only a seek moves the audio; a resize or mode switch rebuilds
+                # the picture around audio that never stopped playing.
+                self._restart_audio = reason not in VIDEO_ONLY_RESTARTS
                 self.stats.reopens += 1
         finally:
+            self.clock.stop()
             self.source.close()
             self.stats.elapsed = time.perf_counter() - started
             self.stats.bytes_written = self.writer.bytes_written
@@ -113,11 +137,20 @@ class Player:
             video_rows = rows
         px_w, px_h = self.renderer.pixel_size(cols, video_rows)
 
+        if self._restart_audio:
+            self.clock.start(self._position)
+            self._restart_audio = False
+        else:
+            # Audio kept playing through the restart, so pick the video up
+            # wherever it has got to rather than where the old pipeline stopped.
+            self._position = self.clock.now()
+
         frames = self.source.open(
             px_w, px_h, start=self._position, pixel_aspect=self.renderer.pixel_aspect
         )
         self.writer.invalidate()
-        self._origin = time.perf_counter() - self._position
+        frame_interval = 1.0 / max(self.source.info.fps, 1.0)
+        drop_threshold = DROP_AFTER_FRAMES * frame_interval
 
         for pts, rgb in frames:
             action = self._handle_keys()
@@ -134,19 +167,17 @@ class Player:
                 if action is not None:
                     self._position = pts
                     return action
-                self._origin = time.perf_counter() - pts
 
-            target = self._origin + pts
-            now = time.perf_counter()
-            lag = now - target
-            frame_interval = 1.0 / max(self.source.info.fps, 1.0)
+            lag = self.clock.now() - pts
 
-            if lag > DROP_AFTER_FRAMES * frame_interval and not self.opts.once:
+            if lag > drop_threshold and not self.opts.once:
                 self.stats.dropped += 1
                 self._position = pts
                 continue
             if lag < 0:
-                _sleep_until(target)
+                # Ahead of the clock. Sleeping on wall time is right even when
+                # the clock is the audio device: we only need to not paint yet.
+                _sleep_for(-lag)
 
             self._paint(rgb, pts, cols, rows, video_rows)
             self._position = pts
@@ -191,7 +222,8 @@ class Player:
         right = f"{clock}  {self._live_fps():.0f}fps"
         if self.stats.dropped:
             right += f"  {self.stats.dropped} drop"
-        right += f"  {self.renderer.name}"
+        # Which clock is driving matters when sync looks wrong, so surface it.
+        right += f"  {self.renderer.name}  {self.clock.source}"
 
         space = cols - len(right) - 2
         if duration and space > 24:
@@ -238,6 +270,10 @@ class Player:
             return "quit"
         if key in ("space", "k"):
             self._paused = not self._paused
+            if self._paused:
+                self.clock.pause()
+            else:
+                self.clock.resume()
             return None
         if key == "h":
             self.opts.hud = not self.opts.hud
@@ -282,7 +318,7 @@ class Player:
             target = min(target, max(duration - 0.1, 0.0))
         self._position = target
         self._notify(f"seek {_fmt_time(target)}")
-        return "reopen"
+        return "seek"
 
     def _notify(self, text: str, seconds: float = 1.5) -> None:
         self._message = text
@@ -314,8 +350,15 @@ class Player:
 # ---------------------------------------------------------------------------
 
 
-def _sleep_until(target: float) -> None:
-    """Sleep accurately. time.sleep() granularity is coarse enough to see as jitter."""
+def _sleep_for(duration: float) -> None:
+    """Sleep accurately. time.sleep() granularity is coarse enough to see as jitter.
+
+    Takes a duration rather than an absolute deadline because the media clock is
+    no longer necessarily the wall clock -- only the *interval* is comparable.
+    """
+    if duration <= 0:
+        return
+    target = time.perf_counter() + duration
     while True:
         remaining = target - time.perf_counter()
         if remaining <= 0:

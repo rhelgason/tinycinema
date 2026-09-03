@@ -3,9 +3,9 @@
 Braindump of the whole idea before writing code. Nothing here is final; it's the
 menu we order from. Decisions that are actually locked in are marked **DECIDED**.
 
-> **Status:** Phases 0 and 1 are built. Section 15 at the bottom records what
-> the plan below got right, what it got wrong, and what only showed up once
-> real frames were moving.
+> **Status:** Phases 0, 1 and 2 are built. Section 15 records what the plan got
+> right and wrong for Phases 0-1; section 16 explains the ffmpeg dependency;
+> section 17 covers Phase 2.
 
 ---
 
@@ -615,3 +615,83 @@ per-cell work is ~50× slower, which puts 30 fps out of reach entirely.
 
 yt-dlp (Phase 3) is a different matter — a whole site-scraping framework — and
 stays an **optional extra**, not a base dependency.
+
+
+---
+
+## 17. What Phase 2 (audio) actually taught us
+
+The claim in section 15 was that swapping the wall clock for audio would be a
+one-method change. That held: the loop still asks `clock.now()` once per frame
+and the diff to `player.py` is small. Everything interesting was in the clock.
+
+### Measured
+
+Against a simulated audio device (a stand-in that emits ffplay's status format
+and, importantly, freezes under SIGSTOP the way a real device does):
+
+| | |
+|---|---|
+| interpolation error when a fresh report lands | **2.7 ms** mean, 13.5 ms max |
+| video offset from the audio clock, full pipeline | **±1 ms** mean, 24 ms max |
+| frames shown, 5s @30fps, all render modes | **149/149**, zero drops |
+| backwards jumps in the timeline | **0** |
+
+The drop threshold is 50 ms, so there is a comfortable margin.
+
+### Four bugs the plan didn't anticipate
+
+**`Clock.resume()` restarted the audio process.** It called `self.start()`,
+which dispatches to the subclass override, which relaunches ffplay. Every pause
+therefore paid a fresh device startup latency and desynced the very thing it had
+just paused. Fixed with a non-virtual `_rebase()`; resume() uses that, start()
+stays polymorphic. A textbook "don't call overridable methods from a base class"
+trap, and invisible without measuring.
+
+**Returning the reported position verbatim makes a staircase.** The obvious
+implementation — `now()` returns whatever the sink last said — pins the timeline
+between reports, so it advances in 30 ms steps. That is most of a frame interval
+at 30fps. The sink already knows *when* it observed each value, so the fix was to
+report `(position, observed_at)` and always interpolate. 34 ms → 2.7 ms.
+
+**The fallback branch had no "only once" guard.** After giving up on audio it
+re-based the wall-clock origin on *every* call, which pinned the timeline at the
+start position forever — a worse failure than the one it was there to prevent.
+
+**A stale pre-pause report survives resume.** Relying on each sink to clear its
+own is fragile, so the clock now records an anchor floor at every start/resume
+and rejects observations older than it. Otherwise the clock extrapolates
+straight through the entire pause.
+
+### Decisions worth recording
+
+- **A resize must not restart audio.** Every size or mode change rebuilds the
+  video pipeline; doing that to the audio device too would be an audible click
+  for no reason. Only a seek restarts audio, and after a video-only restart the
+  decoder is reopened at wherever the audio has *got to*, not where video
+  stopped.
+- **Video waits for audio to actually start.** The clock holds at the start
+  position until the first real report, so the two begin aligned instead of
+  video running 250 ms ahead. This looks like a bug in a naive drift measurement
+  and is in fact the entire point.
+- **The timeline is monotonic.** A late report behind our extrapolation stalls
+  the clock rather than rewinding it; rewinding makes the player re-wait frames
+  it has already shown.
+- **Failure degrades, never freezes.** Parsing a human-readable progress line is
+  fragile, so if nothing parses within 1 s — or the sink is already dead — the
+  clock silently becomes a wall clock and playback continues. Worst case is
+  Phase 1 behaviour. The HUD shows `audio` or `wall*` so which one is in charge
+  is never a mystery.
+
+### Still open
+
+- **ffplay's behaviour under SIGSTOP/SIGCONT is unverified against the real
+  binary.** The simulated device stalls its position while stopped, which is
+  what a real audio device should do, but a real ffplay might absorb the paused
+  interval and jump forward on resume. If it does, the fix is to stop and
+  restart the sink at the exact position instead of signalling it.
+- Live volume and mute need either a restart or a different backend; deferred to
+  Phase 4, where volume already lives.
+- A `sounddevice` backend would give a sample-accurate position and remove the
+  status-line parsing entirely, at the cost of a PortAudio dependency. Worth it
+  only if ffplay proves flaky in practice.

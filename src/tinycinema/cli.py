@@ -6,6 +6,7 @@ import argparse
 import sys
 
 from . import __version__
+from .audio import BACKENDS, make_clock
 from .render import RAMPS, RenderOptions, available_modes
 from .sources import PATTERNS, DecodeError, FFmpegMissingError, UnsupportedSourceError, open_source
 from .term import Terminal, detect_capabilities
@@ -74,8 +75,12 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--threshold", type=float, default=0.5, metavar="F",
                    help="on/off cutoff for braille mode")
 
-    g = p.add_argument_group("audio (Phase 2 -- not implemented yet)")
-    g.add_argument("--no-audio", action="store_true", help="currently a no-op; playback is silent")
+    g = p.add_argument_group("audio")
+    g.add_argument("--no-audio", dest="audio", action="store_false",
+                   help="play silently (video still syncs to a wall clock)")
+    g.add_argument("--volume", type=int, default=100, metavar="0-100")
+    g.add_argument("--audio-backend", default="auto", choices=list(BACKENDS),
+                   help="audio sink to use (default: auto)")
 
     g = p.add_argument_group("output")
     g.add_argument("--no-hud", dest="hud", action="store_false", help="hide the status bar")
@@ -137,13 +142,24 @@ def main(argv: list[str] | None = None) -> int:
         stats=args.stats,
         width=args.width,
         height=args.height,
+        audio=args.audio,
+    )
+
+    clock = make_clock(
+        args.source,
+        source.info,
+        # A single frame has no timeline to sync to, so never spin up audio.
+        enabled=args.audio and not once,
+        backend=args.audio_backend,
+        volume=args.volume,
+        loop=args.loop,
     )
 
     status = 0
     player = None
     try:
         with Terminal(alt_screen=caps.is_tty and not once, hide_cursor=caps.is_tty) as term:
-            player = Player(source, term, playback)
+            player = Player(source, term, playback, clock)
             status = player.run()
     except KeyboardInterrupt:
         status = 130
