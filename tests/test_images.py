@@ -286,3 +286,76 @@ def test_run_length_helps_on_letterbox_bars():
     """Flat black bars are the common case and should compress hard."""
     flat = _run_length_encode(np.zeros(500, int))
     assert len(flat) < 10
+
+
+# -- writer selection --------------------------------------------------------
+
+
+@pytest.mark.parametrize("mode", image_modes())
+def test_image_modes_use_the_image_writer_even_into_a_pipe(mode, tmp_path):
+    """Regression: a pipe selected PlainWriter, which has no draw_image, so
+    `--mode kitty --once > frame.txt` crashed and produced an empty file.
+    An image mode has no escape-free rendering; emitting the payload is right,
+    and `cat frame.txt` in a supporting terminal genuinely displays it."""
+    import numpy as np
+
+    from tinycinema.player import PlaybackOptions, Player
+    from tinycinema.sources.base import FrameSource, MediaInfo
+    from tinycinema.term import Capabilities, ImageWriter
+
+    class Src(FrameSource):
+        info = MediaInfo(fps=30.0)
+
+        def open(self, w, h, *, start=0.0, pixel_aspect=1.0):
+            return iter([(0.0, np.zeros((h, w, 3), np.uint8))])
+
+        def close(self):
+            pass
+
+    class Term:
+        caps = Capabilities(
+            is_tty=False, truecolor=True, color256=True, unicode=True,
+            kitty=False, iterm=False, term="t", term_program="t",
+        )
+
+        def size(self):
+            return (20, 6)
+
+        def take_resize(self):
+            return False
+
+    player = Player(Src(), Term(), PlaybackOptions(mode=mode, hud=False, once=True))
+    assert isinstance(player.writer, ImageWriter)
+
+
+def test_switching_to_an_image_mode_swaps_the_writer():
+    from tinycinema.player import PlaybackOptions, Player
+    from tinycinema.sources.base import FrameSource, MediaInfo
+    from tinycinema.term import Capabilities, FrameWriter, ImageWriter
+
+    class Src(FrameSource):
+        info = MediaInfo(fps=30.0)
+
+        def close(self):
+            pass
+
+    class Term:
+        caps = Capabilities(
+            is_tty=True, truecolor=True, color256=True, unicode=True,
+            kitty=True, iterm=False, term="xterm-kitty", term_program="t",
+        )
+
+        def size(self):
+            return (20, 6)
+
+        def take_resize(self):
+            return False
+
+    player = Player(Src(), Term(), PlaybackOptions(mode="halfblock", hud=False))
+    assert isinstance(player.writer, FrameWriter)
+    while not player.renderer.is_image:
+        player._cycle_mode(+1)
+    assert isinstance(player.writer, ImageWriter)
+    while player.renderer.is_image:
+        player._cycle_mode(+1)
+    assert isinstance(player.writer, FrameWriter)

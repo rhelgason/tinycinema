@@ -125,10 +125,13 @@ class Player:
             self.dumper = FrameDumper(opts.frames_dir)
         self.keys = KeyReader()
         self.renderer = render_mod.create(opts.mode, opts.render)
-        if not self.is_tty:
-            self.writer = PlainWriter(recorder=self.recorder)
-        elif self.renderer.is_image:
+        if self.renderer.is_image:
+            # Even into a pipe: an image mode has no escape-free rendering, and
+            # `--mode kitty --once > frame.txt` then `cat frame.txt` genuinely
+            # displays the picture. PlainWriter would just crash.
             self.writer = ImageWriter(recorder=self.recorder)
+        elif not self.is_tty:
+            self.writer = PlainWriter(recorder=self.recorder)
         else:
             self.writer = FrameWriter(recorder=self.recorder)
 
@@ -277,6 +280,9 @@ class Player:
             payload = self.renderer.encode_image(rgb, cols, video_rows)
             hud = self._hud_text(pts, cols) if self._hud_enabled and video_rows < rows else ""
             self.writer.draw_image(payload, hud, hud_row=rows - 1)
+            if self.dumper is not None:
+                # An image mode's output is pixels, so dump pixels.
+                self.dumper.write_image(rgb)
         else:
             grid = self.renderer.render(rgb)
             if self._hud_enabled and video_rows < rows:
@@ -469,13 +475,14 @@ class Player:
         was_image = self.renderer.is_image
         self.renderer = render_mod.create(modes[i], self.opts.render)
         self.opts.mode = modes[i]
-        if self.is_tty and self.renderer.is_image != was_image:
+        if self.renderer.is_image != was_image:
             # Cells and bitmaps need different writers entirely.
-            self.writer = (
-                ImageWriter(recorder=self.recorder)
-                if self.renderer.is_image
-                else FrameWriter(recorder=self.recorder)
-            )
+            if self.renderer.is_image:
+                self.writer = ImageWriter(recorder=self.recorder)
+            elif self.is_tty:
+                self.writer = FrameWriter(recorder=self.recorder)
+            else:
+                self.writer = PlainWriter(recorder=self.recorder)
         self._notify(f"mode: {modes[i]}")
         return "reopen"  # pixel dimensions differ per mode
 

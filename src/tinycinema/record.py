@@ -78,20 +78,30 @@ class CastRecorder:
 
 
 class FrameDumper:
-    """Writes each rendered frame to DIR/frame-00001.txt as plain text.
+    """Writes each rendered frame to DIR/frame-00001.{txt,png}.
 
-    Useful for building a GIF outside the tool, and for eyeballing exactly what
-    the renderer produced frame by frame.
+    Text for the character modes, PNG for the image modes -- dumping "the
+    frame" should mean whatever that mode actually produced. Zero-padded so a
+    glob sorts into playback order, which is what every tool downstream assumes.
     """
 
-    def __init__(self, directory: str | Path, *, extension: str = "txt") -> None:
+    def __init__(self, directory: str | Path) -> None:
         self.directory = Path(directory)
         self.directory.mkdir(parents=True, exist_ok=True)
-        self.extension = extension
         self.count = 0
 
-    def write(self, text: str) -> Path:
+    def _next(self, extension: str) -> Path:
         self.count += 1
-        path = self.directory / f"frame-{self.count:05d}.{self.extension}"
+        return self.directory / f"frame-{self.count:05d}.{extension}"
+
+    def write(self, text: str) -> Path:
+        path = self._next("txt")
         path.write_text(text + "\n", encoding="utf-8")
+        return path
+
+    def write_image(self, rgb) -> Path:
+        from .png import encode_png
+
+        path = self._next("png")
+        path.write_bytes(encode_png(rgb, level=6))
         return path

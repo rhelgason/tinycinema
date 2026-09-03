@@ -181,6 +181,28 @@ def test_frame_contents_round_trip(tmp_path):
     assert path.read_text() == "line1\nline2\n"
 
 
+def test_image_modes_dump_png_not_text(tmp_path):
+    """Dumping 'the frame' should mean whatever that mode actually produced."""
+    import numpy as np
+
+    d = FrameDumper(tmp_path / "frames")
+    path = d.write_image(np.zeros((4, 6, 3), np.uint8))
+    assert path.suffix == ".png"
+    assert path.read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"
+
+
+def test_text_and_image_frames_share_one_counter(tmp_path):
+    """Otherwise switching mode mid-playback would overwrite earlier frames."""
+    import numpy as np
+
+    d = FrameDumper(tmp_path / "frames")
+    d.write("a")
+    d.write_image(np.zeros((2, 2, 3), np.uint8))
+    d.write("b")
+    names = sorted(p.name for p in (tmp_path / "frames").iterdir())
+    assert names == ["frame-00001.txt", "frame-00002.png", "frame-00003.txt"]
+
+
 def test_zero_padding_keeps_lexicographic_order_correct(tmp_path):
     """Tools that glob frames rely on name order matching frame order."""
     d = FrameDumper(tmp_path / "frames")
