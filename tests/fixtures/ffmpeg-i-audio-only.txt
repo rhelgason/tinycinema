@@ -1,0 +1,7 @@
+[aist#0:0/pcm_s16le @ 0x10e6048f0] Guessed Channel Layout: mono
+Input #0, wav, from '/tmp/tcin/audio.wav':
+  Metadata:
+    encoder         : Lavf61.7.100
+  Duration: 00:00:03.00, bitrate: 705 kb/s
+  Stream #0:0: Audio: pcm_s16le ([1][0][0][0] / 0x0001), 44100 Hz, mono, s16, 705 kb/s
+At least one output file must be specified

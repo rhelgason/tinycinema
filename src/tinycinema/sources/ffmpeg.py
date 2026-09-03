@@ -14,6 +14,7 @@ Two subprocess hazards worth naming, because both are silent hangs:
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import threading
 from collections import deque
@@ -49,13 +50,82 @@ def _parse_rate(value: str | None) -> float | None:
         return None
 
 
-def probe(target: str) -> MediaInfo:
-    """Ask ffprobe about a file or URL. Degrades to defaults if it cannot."""
+# `ffmpeg -i` prints the same facts ffprobe reports, just for humans:
+#   Duration: 00:00:05.00, start: 0.000000, bitrate: 874 kb/s
+#   Stream #0:0[0x1](und): Video: h264 (High) (avc1 / 0x31637661), yuv420p,
+#                          640x360 [SAR 1:1 DAR 16:9], 794 kb/s, 30 fps, ...
+_DURATION_RE = re.compile(r"Duration:\s*(\d+):(\d{2}):(\d{2}(?:\.\d+)?)")
+_VIDEO_STREAM_RE = re.compile(r"Stream #\d+:\d+.*?:\s*Video:\s*(.*)")
+_AUDIO_STREAM_RE = re.compile(r"Stream #\d+:\d+.*?:\s*Audio:")
+# Guard against matching a bitrate or SAR/DAR pair: require plausible dimensions
+# and a word boundary either side.
+_DIMENSIONS_RE = re.compile(r"\b(\d{2,5})x(\d{2,5})\b")
+_FPS_RE = re.compile(r"([\d.]+)\s*fps\b")
+_TITLE_RE = re.compile(r"^\s*title\s*:\s*(.+?)\s*$", re.MULTILINE)
+
+
+def probe_via_ffmpeg(target: str) -> MediaInfo | None:
+    """Fall back to parsing `ffmpeg -i` when ffprobe isn't available.
+
+    Plenty of ffmpeg builds ship without ffprobe -- imageio-ffmpeg and several
+    static distributions among them -- and losing the duration costs the progress
+    bar and seek clamping. ffmpeg itself reports all of it on stderr; it just
+    formats it for people rather than for machines.
+    """
+    exe = ffmpeg_path()
+    if not exe:
+        return None
+    # No output file, so ffmpeg prints the stream summary and exits non-zero.
+    cmd = [exe, "-hide_banner", "-nostdin", "-i", target]
+    try:
+        out = subprocess.run(cmd, capture_output=True, timeout=20, check=False)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+
+    text = (out.stderr or b"").decode("utf-8", "replace")
+    if "Stream #" not in text:
+        return None
+
     info = MediaInfo(title=Path(target).name or target)
-    probe_bin = ffprobe_path()
-    if not probe_bin or target == "-":
-        info.seekable = target != "-"
+
+    m = _DURATION_RE.search(text)
+    if m:
+        hours, minutes, seconds = int(m.group(1)), int(m.group(2)), float(m.group(3))
+        info.duration = hours * 3600 + minutes * 60 + seconds
+
+    info.has_audio = bool(_AUDIO_STREAM_RE.search(text))
+
+    video = _VIDEO_STREAM_RE.search(text)
+    if video:
+        detail = video.group(1)
+        dims = _DIMENSIONS_RE.search(detail)
+        if dims:
+            info.width, info.height = int(dims.group(1)), int(dims.group(2))
+        fps = _FPS_RE.search(detail)
+        if fps:
+            try:
+                rate = float(fps.group(1))
+            except ValueError:
+                rate = 0.0
+            if 0 < rate <= 1000:
+                info.fps = rate
+
+    title = _TITLE_RE.search(text)
+    if title:
+        info.title = title.group(1)
+    return info
+
+
+def probe(target: str) -> MediaInfo:
+    """Ask ffprobe about a file or URL. Degrades gracefully if it cannot."""
+    info = MediaInfo(title=Path(target).name or target)
+    if target == "-":
+        info.seekable = False
         return info
+
+    probe_bin = ffprobe_path()
+    if not probe_bin:
+        return probe_via_ffmpeg(target) or info
 
     cmd = [
         probe_bin,
@@ -68,14 +138,14 @@ def probe(target: str) -> MediaInfo:
     try:
         out = subprocess.run(cmd, capture_output=True, timeout=20, check=False)
     except (OSError, subprocess.TimeoutExpired):
-        return info
+        return probe_via_ffmpeg(target) or info
     if out.returncode != 0:
-        return info
+        return probe_via_ffmpeg(target) or info
 
     try:
         data = json.loads(out.stdout or b"{}")
     except json.JSONDecodeError:
-        return info
+        return probe_via_ffmpeg(target) or info
 
     streams = data.get("streams") or []
     fmt = data.get("format") or {}
