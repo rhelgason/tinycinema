@@ -49,6 +49,30 @@ SGR_RESET = "\x1b[0m"
 
 DEFAULT = -1  # sentinel in a CellGrid colour channel meaning "terminal default"
 
+#: Signals that mean "shut down now" and would otherwise kill us outright.
+#: SIGINT is absent on purpose -- Python already turns it into KeyboardInterrupt.
+FATAL_SIGNALS = ("SIGTERM", "SIGHUP")
+
+
+class Terminated(BaseException):
+    """Raised in the main thread when a fatal signal arrives.
+
+    An exception rather than cleanup-in-the-handler, so that every `finally`
+    already in the program runs: the terminal is restored, and ffmpeg and ffplay
+    are terminated instead of being orphaned and left making noise.
+
+    BaseException, like KeyboardInterrupt, so a stray `except Exception` cannot
+    swallow a shutdown request.
+    """
+
+    def __init__(self, signum: int) -> None:
+        super().__init__(f"terminated by signal {signum}")
+        self.signum = signum
+
+    @property
+    def exit_status(self) -> int:
+        return 128 + self.signum
+
 #: Seconds a new terminal size must hold before we rebuild the pipeline.
 RESIZE_DEBOUNCE = 0.15
 
@@ -504,6 +528,7 @@ class Terminal:
         self._hide_cursor = hide_cursor and self.caps.is_tty
         self._saved_termios = None
         self._prev_winch = None
+        self._prev_fatal: dict[int, object] = {}
         self._entered = False
         self.resized = False
         self._settled_size = self.size()
@@ -578,8 +603,22 @@ class Terminal:
         if self.caps.is_tty and hasattr(signal, "SIGWINCH"):
             self._prev_winch = signal.signal(signal.SIGWINCH, self._on_winch)
 
+        # Without these, `kill` or closing the terminal tab leaves the alt
+        # screen up and the cursor hidden, because a signal death skips atexit.
+        for name in FATAL_SIGNALS:
+            sig = getattr(signal, name, None)
+            if sig is None:
+                continue
+            try:
+                self._prev_fatal[sig] = signal.signal(sig, self._on_fatal)
+            except (ValueError, OSError):
+                pass  # not the main thread, or the platform disallows it
+
         atexit.register(self.restore)
         return self
+
+    def _on_fatal(self, signum, frame):
+        raise Terminated(signum)
 
     def __exit__(self, *exc) -> None:
         self.restore()
@@ -598,6 +637,13 @@ class Terminal:
             except (ValueError, OSError):
                 pass
             self._prev_winch = None
+
+        for sig, previous in self._prev_fatal.items():
+            try:
+                signal.signal(sig, previous)
+            except (ValueError, OSError, TypeError):
+                pass
+        self._prev_fatal.clear()
 
         if self.caps.is_tty:
             # Never emit escapes into a pipe -- it would corrupt piped output.

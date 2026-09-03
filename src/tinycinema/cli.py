@@ -20,7 +20,7 @@ from .sources import (
     open_source,
     parse_quality,
 )
-from .term import Terminal, detect_capabilities
+from .term import Terminal, Terminated, detect_capabilities
 
 EPILOG = """\
 examples:
@@ -249,6 +249,10 @@ def main(argv: list[str] | None = None) -> int:
                     index %= len(items)
     except KeyboardInterrupt:
         status = 130
+    except Terminated as exc:
+        # The terminal has already been restored by Terminal.__exit__ on the
+        # way out; report the conventional 128+signal status.
+        status = exc.exit_status
     except DecodeError as exc:
         print(f"tinycinema: decode failed\n{exc}", file=sys.stderr)
         status = 1
