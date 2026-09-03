@@ -108,11 +108,16 @@ def test_demo_rejects_unknown_pattern():
 # -- source resolution ------------------------------------------------------
 
 
-def test_youtube_urls_report_that_they_need_yt_dlp():
-    with pytest.raises(UnsupportedSourceError, match="yt-dlp"):
-        open_source("https://www.youtube.com/watch?v=dQw4w9WgXcQ")
-    with pytest.raises(UnsupportedSourceError, match="yt-dlp"):
-        open_source("https://youtu.be/dQw4w9WgXcQ")
+def test_youtube_urls_are_routed_to_the_extractor(monkeypatch):
+    """Detailed resolution behaviour lives in test_ytdlp.py; this is the routing."""
+    from tinycinema import sources
+
+    seen = []
+    monkeypatch.setattr(sources, "resolve_url", lambda url, **kw: seen.append(url) or 1 / 0)
+    for url in ("https://www.youtube.com/watch?v=dQw4w9WgXcQ", "https://youtu.be/x"):
+        with pytest.raises(ZeroDivisionError):
+            open_source(url)
+    assert len(seen) == 2
 
 
 def test_missing_file_is_reported_clearly():

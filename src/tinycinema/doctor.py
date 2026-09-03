@@ -76,17 +76,24 @@ def run_doctor() -> int:
     note = _version_of(play) if play else "not installed -- playback will be silent"
     lines.append(f"  {_mark(bool(play), warn=True)} ffplay      {note}")
 
-    ytdlp = shutil.which("yt-dlp")
     try:
-        import yt_dlp  # noqa: F401
+        import yt_dlp
 
-        ytdlp_note = "importable (Phase 3, not wired up yet)"
+        ytdlp_note = yt_dlp.version.__version__
         have_ytdlp = True
     except ImportError:
-        ytdlp_note = ytdlp or "not installed -- needed for YouTube links (Phase 3)"
-        have_ytdlp = bool(ytdlp)
+        ytdlp_note = "not installed -- needed for YouTube and friends"
+        have_ytdlp = False
     lines.append(f"  {_mark(have_ytdlp, warn=True)} yt-dlp      {ytdlp_note}")
 
+    lines.append("")
+
+    from .sources.ytdlp import cache_dir, cache_size
+
+    count, size = cache_size()
+    lines.append("\x1b[1mDownload cache\x1b[0m")
+    lines.append(f"    · location    {cache_dir()}")
+    lines.append(f"    · contents    {count} file(s), {size / 1e6:.1f} MB")
     lines.append("")
 
     # -- terminal ----------------------------------------------------------

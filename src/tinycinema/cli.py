@@ -8,12 +8,23 @@ import sys
 from . import __version__
 from .audio import BACKENDS, make_clock
 from .render import RAMPS, RenderOptions, available_modes
-from .sources import PATTERNS, DecodeError, FFmpegMissingError, UnsupportedSourceError, open_source
+from .sources import (
+    DEFAULT_QUALITY,
+    PATTERNS,
+    DecodeError,
+    FFmpegMissingError,
+    ResolveError,
+    UnsupportedSourceError,
+    YtDlpMissingError,
+    open_source,
+    parse_quality,
+)
 from .term import Terminal, detect_capabilities
 
 EPILOG = """\
 examples:
   tinycinema clip.mp4              play a local file
+  tinycinema "https://youtu.be/..."   play a YouTube video
   tinycinema --demo                built-in test pattern, no media needed
   tinycinema clip.mp4 --mode braille --no-color
   tinycinema clip.mp4 --once       render a single frame and exit
@@ -57,6 +68,11 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--start", type=parse_time, default=0.0, metavar="TIME",
                    help="start at a timestamp (seconds, MM:SS or HH:MM:SS)")
     g.add_argument("--loop", action="store_true", help="repeat forever")
+    g.add_argument("--quality", type=parse_quality, default=DEFAULT_QUALITY, metavar="H",
+                   help=f"max height to fetch for URLs, e.g. 360 or 720p "
+                        f"(default: {DEFAULT_QUALITY})")
+    g.add_argument("--no-cache", dest="cache", action="store_false",
+                   help="stream URLs instead of downloading them first")
 
     g = p.add_argument_group("video")
     g.add_argument("--mode", default="auto", choices=["auto", *available_modes()],
@@ -89,6 +105,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     g = p.add_argument_group("misc")
     g.add_argument("--doctor", action="store_true", help="check dependencies and terminal support")
+    g.add_argument("--clear-cache", action="store_true", help="delete downloaded videos and exit")
     g.add_argument("--version", action="version", version=f"tinycinema {__version__}")
     return p
 
@@ -96,6 +113,13 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+
+    if args.clear_cache:
+        from .sources.ytdlp import clear_cache
+
+        count, freed = clear_cache()
+        print(f"removed {count} file(s), freed {freed / 1e6:.1f} MB")
+        return 0
 
     if args.doctor:
         from .doctor import run_doctor
@@ -123,8 +147,20 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     try:
-        source = open_source(args.source, demo=args.demo, fps=args.fps, loop=args.loop)
-    except (UnsupportedSourceError, FFmpegMissingError) as exc:
+        source = open_source(
+            args.source,
+            demo=args.demo,
+            fps=args.fps,
+            loop=args.loop,
+            quality=args.quality,
+            use_cache=args.cache,
+        )
+    except (
+        UnsupportedSourceError,
+        FFmpegMissingError,
+        YtDlpMissingError,
+        ResolveError,
+    ) as exc:
         print(f"tinycinema: {exc}", file=sys.stderr)
         return 1
 
@@ -146,7 +182,7 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     clock = make_clock(
-        args.source,
+        getattr(source, "target", args.source),
         source.info,
         # A single frame has no timeline to sync to, so never spin up audio.
         enabled=args.audio and not once,

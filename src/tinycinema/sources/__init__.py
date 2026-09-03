@@ -15,10 +15,20 @@ from .ffmpeg import (
     ffmpeg_path,
     ffprobe_path,
     probe,
+    probe_via_ffmpeg,
     require_ffmpeg,
 )
+from .ytdlp import (
+    DEFAULT_QUALITY,
+    ResolveError,
+    YtDlpMissingError,
+    is_extractor_url,
+    parse_quality,
+)
+from .ytdlp import resolve as resolve_url
 
 __all__ = [
+    "DEFAULT_QUALITY",
     "PATTERNS",
     "DecodeError",
     "DemoSource",
@@ -27,24 +37,22 @@ __all__ = [
     "Frame",
     "FrameSource",
     "MediaInfo",
+    "ResolveError",
     "UnsupportedSourceError",
+    "YtDlpMissingError",
     "ffmpeg_path",
     "ffprobe_path",
     "fit_box",
+    "is_extractor_url",
     "open_source",
+    "parse_quality",
     "probe",
+    "probe_via_ffmpeg",
     "require_ffmpeg",
+    "resolve_url",
 ]
 
 _URL_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.-]*://")
-
-# Sites that need yt-dlp to resolve into a playable stream. ffmpeg cannot open
-# these directly -- the page is HTML, not media.
-_NEEDS_EXTRACTOR = re.compile(
-    r"(youtube\.com|youtu\.be|vimeo\.com|twitch\.tv|twitter\.com|x\.com|tiktok\.com"
-    r"|reddit\.com|instagram\.com|dailymotion\.com|soundcloud\.com)",
-    re.IGNORECASE,
-)
 
 
 class UnsupportedSourceError(RuntimeError):
@@ -57,6 +65,9 @@ def open_source(
     demo: str | None = None,
     fps: float | None = None,
     loop: bool = False,
+    quality: int = DEFAULT_QUALITY,
+    use_cache: bool = True,
+    quiet: bool = False,
 ) -> FrameSource:
     """Resolve a CLI argument into a FrameSource."""
     if demo:
@@ -69,14 +80,19 @@ def open_source(
         return FFmpegSource("-", fps=fps, loop=False)
 
     if _URL_RE.match(spec):
-        if _NEEDS_EXTRACTOR.search(spec):
-            # Phase 3. Say so plainly rather than handing the user an ffmpeg
-            # "Invalid data found when processing input" from an HTML page.
-            raise UnsupportedSourceError(
-                f"{spec}\n"
-                "Extractor-backed sites (YouTube and friends) need yt-dlp, which is\n"
-                "Phase 3 and not wired up yet. Direct media URLs already work today."
+        if is_extractor_url(spec):
+            resolved = resolve_url(
+                spec, quality=quality, use_cache=use_cache, quiet=quiet
             )
+            source = FFmpegSource(resolved.target, fps=fps, loop=loop)
+            # Trust the extractor's metadata over a probe of the media itself:
+            # it knows the real title, and for a streamed URL a probe would
+            # cost another round trip.
+            source.info.title = resolved.info.title
+            if resolved.info.duration:
+                source.info.duration = resolved.info.duration
+            source.info.has_audio = resolved.info.has_audio or source.info.has_audio
+            return source
         return FFmpegSource(spec, fps=fps, loop=loop)
 
     path = Path(os.path.expanduser(spec))

@@ -74,9 +74,47 @@ def test_missing_file_exits_nonzero_with_a_message(capsys):
     assert "no such file" in capsys.readouterr().err
 
 
-def test_youtube_url_explains_itself(capsys):
+def test_youtube_url_without_yt_dlp_explains_the_extra(capsys, monkeypatch):
+    import builtins
+
+    real_import = builtins.__import__
+
+    def no_ytdlp(name, *a, **k):
+        if name == "yt_dlp":
+            raise ImportError("nope")
+        return real_import(name, *a, **k)
+
+    monkeypatch.setattr(builtins, "__import__", no_ytdlp)
     assert main(["https://youtube.com/watch?v=abc"]) == 1
     assert "yt-dlp" in capsys.readouterr().err
+
+
+def test_a_url_that_cannot_be_resolved_exits_cleanly(capsys, monkeypatch):
+    """No traceback on a dead link, an offline machine or a private video."""
+    from tinycinema import sources
+
+    def fail(url, **kw):
+        raise sources.ResolveError(f"could not resolve {url}")
+
+    monkeypatch.setattr(sources, "resolve_url", fail)
+    assert main(["https://youtube.com/watch?v=abc"]) == 1
+    assert "could not resolve" in capsys.readouterr().err
+
+
+def test_quality_is_parsed_from_the_command_line():
+    assert build_parser().parse_args(["u", "--quality", "720p"]).quality == 720
+    assert build_parser().parse_args(["u"]).quality == 480
+
+
+def test_no_cache_flag():
+    assert build_parser().parse_args(["u"]).cache is True
+    assert build_parser().parse_args(["u", "--no-cache"]).cache is False
+
+
+def test_clear_cache_exits_without_playing(capsys, monkeypatch, tmp_path):
+    monkeypatch.setenv("TINYCINEMA_CACHE", str(tmp_path / "c"))
+    assert main(["--clear-cache"]) == 0
+    assert "removed" in capsys.readouterr().out
 
 
 def test_demo_once_renders_plain_text_to_a_pipe(capsys):
