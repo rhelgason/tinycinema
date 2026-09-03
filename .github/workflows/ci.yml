@@ -29,6 +29,9 @@ jobs:
       - name: Install
         run: pip install -e ".[dev]"
 
+      - name: yt-dlp extra installs cleanly
+        run: pip install -e ".[youtube]"
+
       - name: Test
         run: pytest -q
 
@@ -104,6 +107,45 @@ jobs:
           print(f"OK: {frames} frames in {secs}s with no working audio device")
           EOF
 
+      - name: Every render mode produces output
+        shell: bash
+        run: |
+          for mode in ascii ascii-color blocks halfblock braille kitty iterm sixel; do
+            tinycinema /tmp/clip.mp4 --once --width 40 --height 12 \
+              --mode "$mode" --no-audio > "/tmp/out-$mode" || exit 1
+            test -s "/tmp/out-$mode" || { echo "$mode produced nothing"; exit 1; }
+            echo "  $mode: $(wc -c < /tmp/out-$mode) bytes"
+          done
+
+      - name: Recording and frame dumping
+        shell: bash
+        run: |
+          script -qec "tinycinema /tmp/clip.mp4 --no-audio --no-hud --fps 10 \
+            --width 40 --height 12 --record /tmp/r.cast --frames /tmp/frames \
+            > /dev/null" /dev/null
+          python - <<'EOF'
+          import json, pathlib
+          lines = pathlib.Path("/tmp/r.cast").read_text().splitlines()
+          header = json.loads(lines[0])
+          assert header["version"] == 2, header
+          events = [json.loads(x) for x in lines[1:]]
+          assert len(events) > 5, f"only {len(events)} events recorded"
+          assert all(e[1] == "o" for e in events)
+          times = [e[0] for e in events]
+          assert times == sorted(times), "cast timestamps must not go backwards"
+          frames = sorted(pathlib.Path("/tmp/frames").iterdir())
+          assert len(frames) > 5, f"only {len(frames)} frames dumped"
+          print(f"OK: {len(events)} cast events, {len(frames)} frames")
+          EOF
+
+      - name: Playlists
+        shell: bash
+        run: |
+          mkdir -p /tmp/pl && cp /tmp/clip.mp4 /tmp/pl/ep1.mp4 \
+            && cp /tmp/clip.mp4 /tmp/pl/ep2.mp4
+          tinycinema /tmp/pl --once --width 40 --height 12 --no-audio > /dev/null
+          tinycinema /tmp/pl --shuffle --once --width 40 --height 12 --no-audio > /dev/null
+
       - name: --doctor reports a healthy setup
         run: tinycinema --doctor
 
@@ -116,6 +158,28 @@ jobs:
           python-version: "3.12"
       - run: pip install ruff
       - run: ruff check src tests tools
+
+  package:
+    name: package builds and installs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install build twine
+      - run: python -m build
+      - run: twine check dist/*
+      - name: A wheel install exposes both console scripts
+        run: |
+          python -m venv /tmp/fresh
+          /tmp/fresh/bin/pip install dist/*.whl
+          /tmp/fresh/bin/tinycinema --version
+          /tmp/fresh/bin/tcin --version
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
 
   assets:
     name: demo assets are up to date

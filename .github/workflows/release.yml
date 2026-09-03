@@ -1,0 +1,58 @@
+name: Release
+
+# Publishes to PyPI when a version tag is pushed.
+#
+# Uses PyPI Trusted Publishing (OIDC) rather than a stored API token: nothing
+# secret lives in this repo. It needs a one-time setup on PyPI first --
+# https://pypi.org/manage/account/publishing/ -- registering rhelgason/tinycinema
+# with workflow `release.yml` and environment `pypi`.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install build twine
+      - run: python -m build
+      - run: twine check dist/*
+
+      # A tag that disagrees with the version in pyproject would publish a
+      # surprise. Catch it before anything is uploaded.
+      - name: Tag must match the package version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          python - <<'EOF'
+          import os, pathlib, re
+          tag = os.environ["GITHUB_REF"].removeprefix("refs/tags/v")
+          text = pathlib.Path("src/tinycinema/__init__.py").read_text()
+          version = re.search(r'__version__ = "([^"]+)"', text).group(1)
+          assert tag == version, f"tag v{tag} != __version__ {version}"
+          print(f"OK: v{version}")
+          EOF
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write # required for trusted publishing
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
