@@ -41,6 +41,11 @@ _STATUS_RE = re.compile(rb"(\d+\.\d+)\s+[A-Z]-[A-Z]:")
 #: Reports older than this are stale (the process wedged, or was stopped).
 _REPORT_TTL = 1.0
 
+#: How far the first post-resume report may sit from where we paused before we
+#: conclude the process did not keep its clock across the stop. Generous, so an
+#: ordinary report interval never trips it.
+_RESUME_TOLERANCE = 0.5
+
 
 class FFplaySink:
     """Plays a file's audio and reports where it has got to."""
@@ -56,6 +61,10 @@ class FFplaySink:
         self._report: tuple[float, float] | None = None
         self._paused = False
         self._offset = 0.0
+        self._paused_position = 0.0
+        #: (position we paused at, perf_counter when we resumed). Used to check
+        #: whether SIGCONT actually preserved the clock. None when not resuming.
+        self._resume_check: tuple[float, float] | None = None
 
     # -- lifecycle ---------------------------------------------------------
 
@@ -86,6 +95,8 @@ class FFplaySink:
         self.stop()
         self._report = None
         self._paused = False
+        self._resume_check = None
+        self._paused_position = position
         # ffplay reports time from the seek point, not from zero.
         self._offset = position
         cmd = self._command(position)
@@ -139,6 +150,28 @@ class FFplaySink:
             # ffplay stopped talking; let the clock coast on the old anchor
             # rather than re-anchoring to something stale.
             return None
+
+        if self._resume_check is not None:
+            paused_at, resumed_when = self._resume_check
+            # Compare against where playback *should* be by now, not against
+            # where it was when we paused: the device has legitimately been
+            # running since resume, and however long the caller took to ask is
+            # time it was entitled to advance by.
+            expected = paused_at + (time.perf_counter() - resumed_when)
+            self._resume_check = None
+            if abs(report[0] - expected) > _RESUME_TOLERANCE:
+                # SIGCONT did not preserve the clock -- the process caught its
+                # timeline up to wall time while it was stopped, so resuming
+                # would silently skip however long the pause lasted. Whether a
+                # given ffmpeg build behaves this way is not something we can
+                # know in advance, so detect it and fall back to a clean
+                # restart at the right position.
+                note(
+                    f"ffplay drifted {report[0] - expected:+.1f}s across the pause; "
+                    "restarting it in the right place"
+                )
+                self.start(expected)
+                return None
         return report
 
     @property
@@ -154,6 +187,9 @@ class FFplaySink:
             self._paused = True
             return
         self._paused = True
+        # Remember where we stopped; resume() stamps the time so anchor() can
+        # tell whether the process kept its clock while it was stopped.
+        self._paused_position = self._report[0] if self._report else self._offset
         try:
             self._proc.send_signal(signal.SIGSTOP)  # type: ignore[union-attr]
         except (OSError, AttributeError, ValueError):
@@ -165,7 +201,9 @@ class FFplaySink:
         self._paused = False
         self._report = None  # anything from before the pause is stale
         if not self.active:
+            self._resume_check = None
             return
+        self._resume_check = (self._paused_position, time.perf_counter())
         try:
             self._proc.send_signal(signal.SIGCONT)  # type: ignore[union-attr]
         except (OSError, AttributeError, ValueError):

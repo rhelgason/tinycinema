@@ -314,12 +314,21 @@ is written and dormant — it only fires on a `v*` tag — if that ever changes.
 ## Development
 
 ```bash
-pytest                              # 357 tests, no video, tty, audio or network
+python tools/verify.py              # first-run check on real hardware
+python tools/verify.py "https://youtu.be/..."   # ...including a real fetch
+
+pytest                              # 365 tests, no video, tty, audio or network
 python tools/make_demo_assets.py    # regenerate the README images
 tinycinema --demo --stats           # quick smoke test
 ```
 
-The test suite deliberately needs no media, terminal, sound card or network
+`tools/verify.py` exists because of what the test suite deliberately *doesn't*
+touch. It walks the real-hardware path in order — dependencies, rendering, a
+real ffmpeg decode, every render mode, timed playback under a real pty, then a
+yt-dlp fetch — so a failure tells you which layer broke rather than just that
+something did.
+
+The test suite itself needs no media, terminal, sound card or network
 connection: the writer is verified with golden byte strings, the renderers with
 exact cell grids, the image protocols by decoding their payloads back to pixels,
 both clocks by hand-cranking them, and `ffmpeg -i` parsing against captured real

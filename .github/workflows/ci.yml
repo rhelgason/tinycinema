@@ -146,6 +146,11 @@ jobs:
           tinycinema /tmp/pl --once --width 40 --height 12 --no-audio > /dev/null
           tinycinema /tmp/pl --shuffle --once --width 40 --height 12 --no-audio > /dev/null
 
+      # tools/verify.py is what gets run on real hardware for a first-run
+      # check. Running it here means it cannot quietly rot between uses.
+      - name: The first-run verification script works
+        run: python tools/verify.py
+
       - name: --doctor reports a healthy setup
         run: tinycinema --doctor
 

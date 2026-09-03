@@ -479,3 +479,95 @@ def test_ffplay_is_used_when_available(monkeypatch):
     c = audio_mod.make_clock("clip.mp4", audio_info())
     assert isinstance(c, AudioClock)
     assert isinstance(c.sink, FFplaySink)
+
+
+# -- surviving pause on a sink whose clock we can't predict ------------------
+
+
+class StubProc:
+    """Just enough of Popen for the sink to think it is running."""
+
+    returncode = None
+
+    def poll(self):
+        return None
+
+    def send_signal(self, sig):
+        pass
+
+
+def paused_sink(monkeypatch, at=5.0):
+    monkeypatch.setattr("tinycinema.audio.ffplay.ffplay_path", lambda: "/bin/ffplay")
+    sink = FFplaySink("clip.mp4")
+    sink._proc = StubProc()
+    import time as real_time
+
+    sink._report = (at, real_time.perf_counter())
+    sink.pause()
+    return sink
+
+
+def test_a_sink_that_kept_its_clock_is_left_alone(monkeypatch):
+    import time as real_time
+
+    sink = paused_sink(monkeypatch, at=5.0)
+    restarts = []
+    monkeypatch.setattr(sink, "start", lambda pos=0.0: restarts.append(pos))
+
+    sink.resume()
+    # It carried on from 5.0, as an audio device that stalled would.
+    sink._report = (5.02, real_time.perf_counter())
+    assert sink.anchor() is not None
+    assert restarts == [], "no restart needed when the clock was preserved"
+
+
+def test_a_sink_that_lost_its_clock_is_restarted_in_the_right_place(monkeypatch):
+    """Regression guard for a behaviour we cannot verify without real hardware:
+    if the process catches its timeline up to wall time while stopped, resuming
+    would silently skip the whole pause."""
+    import time as real_time
+
+    sink = paused_sink(monkeypatch, at=5.0)
+    restarts = []
+    monkeypatch.setattr(sink, "start", lambda pos=0.0: restarts.append(pos))
+
+    sink.resume()
+    sink._report = (12.0, real_time.perf_counter())  # absorbed a 7s pause
+    assert sink.anchor() is None, "must not hand back the bogus position"
+    assert restarts and restarts[0] == pytest.approx(5.0, abs=0.2)
+
+
+def test_the_resume_check_allows_for_time_since_resuming(monkeypatch):
+    """A caller slow to ask must not look like drift: the device is entitled to
+    advance by however long it has been running since resume."""
+    import time as real_time
+
+    sink = paused_sink(monkeypatch, at=5.0)
+    restarts = []
+    monkeypatch.setattr(sink, "start", lambda pos=0.0: restarts.append(pos))
+
+    sink.resume()
+    # Pretend 0.8s passed between resuming and the first anchor() call.
+    paused_at, _ = sink._resume_check
+    sink._resume_check = (paused_at, real_time.perf_counter() - 0.8)
+    sink._report = (5.8, real_time.perf_counter())
+
+    assert sink.anchor() is not None
+    assert restarts == [], "0.8s of legitimate playback is not drift"
+
+
+def test_the_resume_check_runs_only_once(monkeypatch):
+    import time as real_time
+
+    sink = paused_sink(monkeypatch, at=5.0)
+    sink.resume()
+    sink._report = (5.01, real_time.perf_counter())
+    sink.anchor()
+    assert sink._resume_check is None
+
+
+def test_resuming_a_dead_sink_does_not_arm_the_check(monkeypatch):
+    sink = paused_sink(monkeypatch, at=5.0)
+    sink._proc = None  # process exited while we were paused
+    sink.resume()
+    assert sink._resume_check is None
