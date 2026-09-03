@@ -3,9 +3,9 @@
 Braindump of the whole idea before writing code. Nothing here is final; it's the
 menu we order from. Decisions that are actually locked in are marked **DECIDED**.
 
-> **Status:** Phases 0, 1 and 2 are built. Section 15 records what the plan got
-> right and wrong for Phases 0-1; section 16 explains the ffmpeg dependency;
-> section 17 covers Phase 2.
+> **Status:** Phases 0-5 are built. Section 15 records what the plan got right
+> and wrong for Phases 0-1; section 16 explains the ffmpeg dependency; section 17
+> covers Phase 2 (audio); section 18 covers Phases 3-5.
 
 ---
 
@@ -695,3 +695,85 @@ straight through the entire pause.
 - A `sounddevice` backend would give a sample-accurate position and remove the
   status-line parsing entirely, at the cost of a PortAudio dependency. Worth it
   only if ffplay proves flaky in practice.
+
+
+---
+
+## 18. What Phases 3-5 taught us
+
+### Phase 3 — YouTube
+
+The plan said "resolve a URL, then stream or cache". What it missed is *why*
+caching has to be the default: YouTube serves video and audio as separate DASH
+streams, and tinycinema runs two processes over the same media (ffmpeg for
+pictures, ffplay for sound). Two processes cannot each open half of a DASH pair
+and stay in sync.
+
+So the default downloads and muxes once, after which the file is indistinguishable
+from any local file and nothing downstream is special-cased. `--no-cache` still
+works, but only by asking for a *progressive* format — one URL carrying both
+streams — which is a real constraint worth stating rather than a preference.
+
+The design note about fetching low quality on purpose turned out to be even more
+right than written: at ~200x100 rendered pixels, 480p and 1080p are
+byte-identical on screen, so the default is 480p.
+
+### Phase 4 — polish
+
+**Frame stepping exposed a latent bug in pause.** The loop checked for pause
+*after* pulling a frame from the decoder, so a single step advanced two: one for
+the step, one for the repaint behind it. Checking before consuming, and
+repainting the last shown frame rather than a fresh one, fixed it. This was
+invisible during normal playback, which is why it survived Phases 1-2.
+
+**Volume is where ffplay's lack of IPC finally bites.** It takes its volume at
+launch and offers no way to change it, so every adjustment relaunches the
+process at the current position. Debouncing collapses a burst of keypresses into
+one restart; without that, holding a volume key shreds the audio. This is the
+strongest argument yet for a `sounddevice` backend.
+
+**KeyReader busy-waited on a pipe.** `poll()` returned instantly when stdin was
+not a terminal, so the paused idle loop pinned a core. Honouring the timeout
+regardless fixed it.
+
+### Phase 5 — real pixels
+
+**Bandwidth, not fidelity, is the constraint.** A 200x50-cell terminal is
+1600x800 physical pixels; raw RGB at 30fps is 115 MB/s, which no terminal will
+take. Capping at 180k pixels and letting the terminal scale up makes these modes
+merely expensive. Measured at 96x28 through the full player:
+
+| | bytes/frame | encode | notes |
+|---|---:|---:|---|
+| kitty | 337 KB | 0.5 ms | raw RGB, so heavy on the wire |
+| iterm | 42 KB | 0.8 ms | PNG, 8x lighter for one extra millisecond |
+| sixel | 29 KB | 15.2 ms | lightest and most portable, slowest to encode |
+
+All three hold 30fps with zero drops. The wire cost is the thing to watch over
+SSH, where kitty's 10 MB/s would be hopeless and sixel's 0.9 MB/s would not.
+
+**The sixel encoder needed the same lesson as the cell encoder in Phase 1.** The
+obvious run-length loop steps once per pixel: 384px x ~100 colours x 37 bands is
+1.4M Python iterations, measured at 42ms a frame — more than the entire 30fps
+budget. Finding run boundaries with `diff()` makes it proportional to runs
+instead: 42ms -> 15ms, and letterbox bars become nearly free. Twice now the fix
+has been "stop iterating per pixel"; it is worth assuming this is the answer
+next time too.
+
+**A deliberate deviation from section 9.** That section had `--mode auto` climb
+the whole ladder to kitty/iTerm2/sixel when available. Built and looked at, that
+is the wrong default: the premise of this project is video rendered out of
+characters, and silently substituting a bitmap defeats it. `auto` now stops at
+`halfblock`, image modes are explicit, and `--doctor` advertises which ones work.
+There is a test pinning this so it cannot drift back.
+
+Relatedly, `r` cycles only through modes the terminal can actually display.
+Cycling into sixel on a terminal that cannot decode it sprays garbage.
+
+### Still open
+
+- Sixel's remaining 15ms is the per-colour pass over each band. Fewer palette
+  entries or a smarter grouping would help; 66fps is enough for now.
+- Live volume still costs an audio gap. A `sounddevice` backend would fix that
+  and the status-line parsing in one go, at the cost of a PortAudio dependency.
+- No PyPI release yet.

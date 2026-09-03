@@ -15,11 +15,10 @@ Play videos — local files or YouTube links — directly in your terminal, with
 ---
 
 > [!NOTE]
-> **Video and audio both play, in sync.** Local files and generated test
-> patterns render against the audio device's real playback position, with
-> seeking, pause, live mode switching and resize handling. YouTube is Phase 3 —
-> see the [roadmap](#roadmap). The full design write-up, including everything
-> considered and rejected, is in [DESIGN.md](DESIGN.md).
+> **Feature complete through Phase 5.** Local files, YouTube links, directories
+> and playlists all play with sound, in sync, across five character modes and
+> three inline-image protocols. Not on PyPI yet. The full design write-up,
+> including everything considered and rejected, is in [DESIGN.md](DESIGN.md).
 
 ---
 
@@ -108,7 +107,7 @@ Not on PyPI yet. From source:
 git clone https://github.com/rhelgason/tinycinema.git
 cd tinycinema
 python -m venv .venv && source .venv/bin/activate
-pip install -e ".[dev]"
+pip install -e ".[youtube]"     # drop [youtube] if you only play local files
 ```
 
 ### Requirements
@@ -119,6 +118,7 @@ pip install -e ".[dev]"
 | **numpy** | installed automatically |
 | **ffmpeg** | required to play actual media (`--demo` works without it) |
 | **ffplay** | ships with ffmpeg; without it playback is silent |
+| **yt-dlp** | optional — only for YouTube and friends |
 | **A truecolor terminal** | recommended; degrades to 256-colour and mono |
 
 ```bash
@@ -150,6 +150,21 @@ tinycinema clip.mp4 --mode braille --contrast 3
 tinycinema clip.mp4 --start 1:30 --loop
 tinycinema clip.mp4 --no-audio --volume 50
 
+# YouTube and ~1800 other sites (downloads and caches by default)
+tinycinema "https://www.youtube.com/watch?v=FtutLA63Cp8"
+tinycinema "https://youtu.be/..." --quality 720p
+tinycinema "https://youtu.be/..." --no-cache        # stream instead
+
+# a whole directory, or several files, shuffled
+tinycinema ~/Videos --shuffle
+tinycinema a.mp4 b.mkv c.webm
+
+# real pixels, if your terminal can do it (see --doctor)
+tinycinema clip.mp4 --mode kitty --fps 15
+
+# record what you see
+tinycinema clip.mp4 --record demo.cast --no-hud
+
 # a single frame — thumbnails for scripts
 tinycinema clip.mp4 --once --start 00:01:30
 
@@ -167,6 +182,10 @@ Built-in test patterns: `ball`, `plasma`, `bars`, `mandelbrot`.
 | <kbd>←</kbd> <kbd>→</kbd> | seek ∓5s |
 | <kbd>j</kbd> <kbd>l</kbd> | seek ∓10s |
 | <kbd>↑</kbd> <kbd>↓</kbd> | seek ±60s |
+| <kbd>,</kbd> <kbd>.</kbd> | step one frame back / forward (while paused) |
+| <kbd>-</kbd> <kbd>=</kbd> | volume down / up |
+| <kbd>m</kbd> | mute |
+| <kbd>n</kbd> <kbd>p</kbd> | next / previous in the playlist |
 | <kbd>r</kbd> / <kbd>R</kbd> | cycle render mode forward / back |
 | <kbd>c</kbd> | toggle colour |
 | <kbd>h</kbd> | toggle HUD |
@@ -175,7 +194,10 @@ Built-in test patterns: `ball`, `plasma`, `bars`, `mandelbrot`.
 ### Options
 
 ```
---mode MODE       ascii | ascii-color | blocks | halfblock | braille | auto
+text modes    ascii | ascii-color | blocks | halfblock | braille
+image modes   kitty | iterm | sixel          (opt-in; see --doctor)
+
+--mode MODE       one of the above, or auto (default: auto)
 --ramp NAME       blocks | standard | long | binary
 --width / --height    override the auto-detected cell grid
 --fps N           cap the render rate
@@ -183,16 +205,30 @@ Built-in test patterns: `ball`, `plasma`, `bars`, `mandelbrot`.
 --gamma / --contrast / --brightness
 --dither          none | ordered
 --threshold F     on/off cutoff for braille mode
+
 --no-audio        play silently (video still syncs to a wall clock)
 --volume 0-100
 --audio-backend   auto | ffplay | none
+
+--quality H       max height to fetch for URLs, e.g. 360 or 720p
+--no-cache        stream URLs rather than downloading first
+--shuffle         randomise playlist order
 --start TIME      seconds, MM:SS or HH:MM:SS
 --loop            repeat forever
+
 --once            render one frame and exit
 --no-hud          hide the status bar
 --stats           print a timing summary on exit
---doctor          diagnose ffmpeg and terminal capabilities
+--record OUT.cast write an asciinema recording
+--frames DIR      dump each rendered frame as text
+--doctor          diagnose ffmpeg, audio and terminal capabilities
+--clear-cache     delete downloaded videos
 ```
+
+`--mode auto` deliberately never picks an image mode. The premise here is video
+rendered out of *characters*; silently swapping in a bitmap would defeat it. Ask
+for `--mode kitty` (or `iterm`, or `sixel`) explicitly — `--doctor` tells you
+which your terminal supports.
 
 Full list: `tinycinema --help`.
 
@@ -253,21 +289,25 @@ with video landing within **±1 ms** of the audio clock (drop threshold: 50 ms).
 - [x] **Phase 0** — project skeleton, `--doctor`, generated test patterns
 - [x] **Phase 1** — silent playback of local files, seeking, HUD, resize handling
 - [x] **Phase 2** — audio + A/V sync
-- [ ] **Phase 3** — YouTube URLs via yt-dlp, with a local cache 🎯 _next_
-- [ ] **Phase 4** — frame stepping, volume, playlists, `--record`
-- [ ] **Phase 5** — Kitty/iTerm2/sixel inline images, PyPI release
+- [x] **Phase 3** — YouTube URLs via yt-dlp, with an LRU download cache
+- [x] **Phase 4** — frame stepping, volume, playlists, `--record`
+- [x] **Phase 5** — Kitty/iTerm2/sixel inline images
+- [ ] **Next** — PyPI release
 
 ## Development
 
 ```bash
-pytest                              # 204 tests, no video, tty or audio needed
+pytest                              # 351 tests, no video, tty, audio or network
 python tools/make_demo_assets.py    # regenerate the README images
 tinycinema --demo --stats           # quick smoke test
 ```
 
-The test suite deliberately needs no media, terminal or sound card: the writer
-is verified with golden byte strings, the renderers with exact cell grids, and
-both the timing loop and the audio clock against hand-cranked clocks.
+The test suite deliberately needs no media, terminal, sound card or network
+connection: the writer is verified with golden byte strings, the renderers with
+exact cell grids, the image protocols by decoding their payloads back to pixels,
+both clocks by hand-cranking them, and `ffmpeg -i` parsing against captured real
+output in `tests/fixtures/`. yt-dlp is stubbed, and the cache is tested against
+a real temporary directory.
 
 ## Contributing
 
