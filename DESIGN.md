@@ -548,3 +548,70 @@ still queued, so pressing `r` three times advanced one mode.
   which real content shouldn't have to.
 - No ffprobe means no duration, so no progress bar and no seek clamping. Worth a
   fallback that estimates duration from the container.
+
+---
+
+## 16. Why ffmpeg is a hard dependency — **DECIDED**
+
+For a project whose appeal is "I built a video player", leaning on ffmpeg
+deserves a straight answer rather than a shrug. Recorded here because the
+question will come back.
+
+### What ffmpeg is actually asked to do
+
+Exactly five jobs, in one subprocess:
+
+| # | Job | Could we? |
+|---|---|---|
+| 1 | Demux the container (MP4/MKV box parsing) | Yes, a few hundred lines |
+| 2 | **Decode H.264 / HEVC / VP9 / AV1** | **No — see below** |
+| 3 | YUV 4:2:0 → RGB | Yes, 0.44 ms in numpy |
+| 4 | Scale + letterbox to the cell grid | Yes |
+| 5 | Normalise to a constant frame rate | Yes |
+
+And what it does *not* touch: the pixel→glyph mapping, the diffed writer, A/V
+sync, frame dropping, capability detection, raw mode, resize. All of that — the
+part that makes this project this project — is ours. ffmpeg is not a video
+*player*; it is a codec and container library, filling the same role a PNG
+decoder fills in an image viewer.
+
+Only item 2 is genuinely load-bearing, and it is not a component of this project
+so much as a different, much larger one. The H.264 spec runs to ~800 pages;
+libavcodec's decoder for it alone is tens of thousands of lines of C. CABAC is
+strictly serial per-bit, and that is before motion compensation across reference
+frames, deblocking and B-frame reordering. It is also patent-encumbered.
+
+### What pure Python *could* manage (measured)
+
+Worth knowing, because the answer is more encouraging than expected. The serial
+bit-reading that entropy decoding demands — the part that cannot be vectorised —
+runs at **8.4 M bits/s ≈ 0.84 M coefficients/s** in CPython. Everything
+downstream vectorises and is nearly free (IDCT over 1350 blocks: **0.25 ms**;
+YUV→RGB at 320×180: **0.44 ms**).
+
+For an MJPEG-class codec that works out to:
+
+| Resolution | Max fps | |
+|---|---:|---|
+| 200×100 (terminal-sized) | 150 | comfortable |
+| 320×180 | 52 | workable |
+| 640×360 | 13 | too slow |
+| 1920×1080 | 1.4 | hopeless |
+
+The interesting part: **we render to ~200×100 pixels**, so we never needed to
+decode 1080p. At the resolutions this project actually consumes, hand-written
+decoders for Y4M, GIF, PNG/APNG, MJPEG/AVI and WAV (all stdlib + numpy, ~800
+lines total) would be fast enough. That is a real option and it stays on the
+table as a `sources/native/` backend — `sources/` is behind an interface
+precisely so it can drop in without a rewrite.
+
+### The decision
+
+**ffmpeg stays a hard requirement.** Being able to point the thing at any video
+file on disk is worth more than decoder purity, and the decode layer is not
+where this project's interest lies. numpy stays too: it is an array primitive
+that knows nothing about video or terminals, and without it the per-pixel and
+per-cell work is ~50× slower, which puts 30 fps out of reach entirely.
+
+yt-dlp (Phase 3) is a different matter — a whole site-scraping framework — and
+stays an **optional extra**, not a base dependency.
