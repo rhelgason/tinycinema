@@ -70,12 +70,39 @@ jobs:
       - name: Decode an actual video
         run: |
           ffmpeg -y -loglevel error -f lavfi \
-            -i "testsrc2=size=320x180:rate=30:duration=2" \
-            -c:v libx264 -pix_fmt yuv420p /tmp/clip.mp4
+            -i "testsrc2=size=320x180:rate=30:duration=2" -f lavfi \
+            -i "sine=frequency=440:duration=2" \
+            -c:v libx264 -pix_fmt yuv420p -c:a aac /tmp/clip.mp4
           tinycinema /tmp/clip.mp4 --once --width 60 --height 20 --mode ascii
           tinycinema /tmp/clip.mp4 --once --width 60 --height 20 --mode halfblock \
             > /dev/null
-          tinycinema /tmp/clip.mp4 --stats --width 60 --height 20 --fps 10
+          tinycinema /tmp/clip.mp4 --stats --width 60 --height 20 --fps 10 --no-audio
+
+      # A CI runner has ffplay but no sound card, so ffplay dies immediately.
+      # That is exactly the failure the clock is built to survive: it must fall
+      # back to wall time and keep playing rather than freeze on frame one.
+      #
+      # Run it under `script` to get a real pty: piped stdout implies --once,
+      # which would render a single frame and never exercise the timing loop.
+      - name: Audio failure degrades instead of hanging
+        timeout-minutes: 2
+        shell: bash
+        run: |
+          script -qec "tinycinema /tmp/clip.mp4 --stats --no-hud \
+            --width 60 --height 20 > /dev/null" /dev/null | tr -d '\r' > out.txt || true
+          cat out.txt
+          python - <<'EOF'
+          import re
+          text = open("out.txt").read()
+          m = re.search(r"rendered (\d+) frames in ([\d.]+)s", text)
+          assert m, f"no stats line in output:\n{text}"
+          frames, secs = int(m.group(1)), float(m.group(2))
+          # 2s clip at 30fps. Anything near 60 means the loop really ran; a
+          # freeze on frame one, or a 1-frame --once, would fail here.
+          assert frames > 30, f"only {frames} frames -- the loop stalled"
+          assert secs < 6, f"took {secs}s for a 2s clip -- audio failure hung it"
+          print(f"OK: {frames} frames in {secs}s with no working audio device")
+          EOF
 
       - name: --doctor reports a healthy setup
         run: tinycinema --doctor
