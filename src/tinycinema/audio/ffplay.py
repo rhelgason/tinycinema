@@ -32,6 +32,7 @@ import threading
 import time
 
 from ..binaries import ffplay_path
+from ..log import note
 
 #: "   2.34 M-A:  0.000 fd=..." -- the sync marker is A-V, M-V or M-A depending
 #: on which streams exist, so match the shape rather than a literal.
@@ -87,9 +88,11 @@ class FFplaySink:
         self._paused = False
         # ffplay reports time from the seek point, not from zero.
         self._offset = position
+        cmd = self._command(position)
+        note("ffplay " + " ".join(cmd[1:]))
         try:
             self._proc = subprocess.Popen(
-                self._command(position),
+                cmd,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.PIPE,
                 stdin=subprocess.DEVNULL,  # never let it eat our keystrokes

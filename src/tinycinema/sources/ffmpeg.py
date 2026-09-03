@@ -23,6 +23,7 @@ from pathlib import Path
 
 import numpy as np
 
+from ..log import note
 from ..binaries import (
     FFmpegMissingError,
     ffmpeg_path,
@@ -254,6 +255,7 @@ class FFmpegSource(FrameSource):
         except OSError as exc:
             raise DecodeError(f"could not start ffmpeg: {exc}") from exc
 
+        note("ffmpeg " + " ".join(cmd[1:]))
         self._drain_stderr()
         return self._iter_frames(width, height, start)
 

@@ -33,6 +33,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from ..log import note
 from .base import MediaInfo
 
 #: Sites that serve HTML rather than media, so ffmpeg cannot open them directly.
@@ -235,6 +236,8 @@ def resolve(
     """Turn a page URL into a playable file path or direct media URL."""
     yt_dlp = import_yt_dlp()
     progressive = not use_cache
+    note(f"resolving {url}")
+    note(f"format selector: {format_selector(quality, progressive=progressive)}")
 
     base_opts = {
         "quiet": True,
@@ -250,6 +253,7 @@ def resolve(
             except Exception as exc:  # yt_dlp raises a wide variety
                 raise ResolveError(f"could not resolve {url}\n{exc}") from exc
         entry = _first_entry(entry)
+        note(f"chose format {entry.get('format_id')} ({entry.get('format')})")
         direct = entry.get("url")
         if not direct:
             raise ResolveError(
@@ -271,8 +275,11 @@ def resolve(
 
     video_id = _safe(entry.get("id") or entry.get("title") or "video")
     stem = f"{video_id}-{quality}p"
+    note(f"chose format {entry.get('format_id')} ({entry.get('format')})")
+    note(f"cache dir: {directory}")
     existing = _find_cached(directory, stem)
     if existing is not None:
+        note(f"cache hit: {existing}")
         os.utime(existing, None)  # refresh for the LRU
         return Resolved(str(existing), _media_info(entry, seekable=True), cached=True)
 
@@ -287,6 +294,7 @@ def resolve(
             raise ResolveError(f"could not download {url}\n{exc}") from exc
 
     downloaded = _find_cached(directory, stem)
+    note(f"downloaded to {downloaded}")
     if downloaded is None:
         raise ResolveError(f"download finished but no file appeared for {url}")
 

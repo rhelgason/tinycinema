@@ -174,6 +174,10 @@ tinycinema clip.mp4 --mode kitty --fps 15
 # record what you see
 tinycinema clip.mp4 --record demo.cast --no-hud
 
+# when something doesn't work, this prints the resolved format,
+# the cache path and the exact ffmpeg/ffplay commands
+tinycinema "https://youtu.be/..." --verbose
+
 # a single frame — thumbnails for scripts
 tinycinema clip.mp4 --once --start 00:01:30
 
@@ -232,6 +236,7 @@ image modes   kitty | iterm | sixel          (opt-in; see --doctor)
 --frames DIR      dump each rendered frame as text
 --doctor          diagnose ffmpeg, audio and terminal capabilities
 --clear-cache     delete downloaded videos
+-v, --verbose     explain what is being resolved, fetched and run
 ```
 
 `--mode auto` deliberately never picks an image mode. The premise here is video

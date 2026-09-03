@@ -111,6 +111,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="write each rendered frame to DIR as plain text")
 
     g = p.add_argument_group("misc")
+    g.add_argument("-v", "--verbose", action="store_true",
+                   help="explain what is being resolved, fetched and run (stderr)")
     g.add_argument("--doctor", action="store_true", help="check dependencies and terminal support")
     g.add_argument("--clear-cache", action="store_true", help="delete downloaded videos and exit")
     g.add_argument("--version", action="version", version=f"tinycinema {__version__}")
@@ -120,6 +122,10 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+
+    from .log import note, set_verbose
+
+    set_verbose(args.verbose)
 
     if args.clear_cache:
         from .sources.ytdlp import clear_cache
@@ -212,6 +218,12 @@ def main(argv: list[str] | None = None) -> int:
                     index += 1
                     continue
 
+                note(
+                    f"playing {source.info.title!r}: "
+                    f"{source.info.width}x{source.info.height} "
+                    f"{source.info.fps:.2f}fps "
+                    f"dur={source.info.duration} audio={source.info.has_audio}"
+                )
                 clock = make_clock(
                     getattr(source, "target", spec),
                     source.info,
@@ -221,6 +233,7 @@ def main(argv: list[str] | None = None) -> int:
                     volume=args.volume,
                     loop=playback.loop,
                 )
+                note(f"mode={mode} clock={type(clock).__name__}")
                 try:
                     player = Player(source, term, playback, clock)
                     player.run()

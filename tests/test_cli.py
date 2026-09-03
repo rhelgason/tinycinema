@@ -111,6 +111,27 @@ def test_no_cache_flag():
     assert build_parser().parse_args(["u", "--no-cache"]).cache is False
 
 
+def test_verbose_explains_what_it_is_doing(capsys):
+    """The point of --verbose is being able to debug a run you can't reproduce."""
+    main(["--demo", "--width", "20", "--height", "6", "--verbose"])
+    err = capsys.readouterr().err
+    assert "playing" in err
+    assert "mode=" in err and "clock=" in err
+
+
+def test_verbose_writes_only_to_stderr(capsys):
+    """stdout may be a pipe someone is capturing frames from."""
+    main(["--demo", "--width", "20", "--height", "6", "--verbose"])
+    captured = capsys.readouterr()
+    assert "\x1b" not in captured.out
+    assert "playing" not in captured.out
+
+
+def test_quiet_by_default(capsys):
+    main(["--demo", "--width", "20", "--height", "6"])
+    assert "mode=" not in capsys.readouterr().err
+
+
 def test_clear_cache_exits_without_playing(capsys, monkeypatch, tmp_path):
     monkeypatch.setenv("TINYCINEMA_CACHE", str(tmp_path / "c"))
     assert main(["--clear-cache"]) == 0
