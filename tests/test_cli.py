@@ -138,6 +138,52 @@ def test_clear_cache_exits_without_playing(capsys, monkeypatch, tmp_path):
     assert "removed" in capsys.readouterr().out
 
 
+def test_one_unplayable_file_does_not_abandon_the_playlist(capsys, monkeypatch, tmp_path):
+    """A file can look fine at open time and only fail once ffmpeg decodes it,
+    so the per-item guard has to cover playback, not just opening."""
+    from tinycinema import cli as cli_mod
+    from tinycinema import player as player_mod
+    from tinycinema import term as term_mod
+    from tinycinema.sources import DecodeError, DemoSource
+    from tinycinema.term import Capabilities
+
+    # Pretend to be a terminal: a pipe implies --once, which stops a playlist
+    # after the first item by design and would mask the behaviour under test.
+    tty_caps = Capabilities(
+        is_tty=True, truecolor=True, color256=True, unicode=True,
+        kitty=False, iterm=False, term="xterm", term_program="test",
+    )
+    monkeypatch.setattr(cli_mod, "detect_capabilities", lambda: tty_caps)
+    monkeypatch.setattr(term_mod, "detect_capabilities", lambda *a, **k: tty_caps)
+
+    for name in ("a.mp4", "b.mp4", "c.mp4"):
+        (tmp_path / name).write_bytes(b"\0")
+
+    opened = []
+    monkeypatch.setattr(
+        cli_mod, "open_source",
+        lambda spec, **kw: (opened.append(spec), DemoSource("bars", fps=30.0))[1],
+    )
+
+    class FailsOnTheSecond:
+        exit_reason = "eof"
+
+        def __init__(self, source, term, opts, clock=None):
+            self.stats = player_mod.Stats()
+
+        def run(self):
+            if len(opened) == 2:
+                raise DecodeError("moov atom not found")
+            return 0
+
+    monkeypatch.setattr(player_mod, "Player", FailsOnTheSecond)
+
+    code = main([str(tmp_path), "--width", "20", "--height", "6", "--no-audio"])
+    assert len(opened) == 3, f"stopped after {len(opened)} of 3 files"
+    assert code == 1, "a failed file should still show in the exit status"
+    assert "decode failed" in capsys.readouterr().err
+
+
 def test_demo_once_renders_plain_text_to_a_pipe(capsys):
     """Piped output must be plain text: no escapes, exactly one frame."""
     assert main(["--demo", "--width", "20", "--height", "6"]) == 0

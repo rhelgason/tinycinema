@@ -14,6 +14,7 @@ from .sources import (
     PATTERNS,
     DecodeError,
     FFmpegMissingError,
+    NoVideoStreamError,
     ResolveError,
     UnsupportedSourceError,
     YtDlpMissingError,
@@ -216,6 +217,7 @@ def main(argv: list[str] | None = None) -> int:
                 except (
                     UnsupportedSourceError,
                     FFmpegMissingError,
+                    NoVideoStreamError,
                     YtDlpMissingError,
                     ResolveError,
                 ) as exc:
@@ -246,6 +248,17 @@ def main(argv: list[str] | None = None) -> int:
                 try:
                     player = Player(source, term, playback, clock)
                     player.run()
+                except DecodeError as exc:
+                    # A file can look fine at open time and only fail once
+                    # ffmpeg actually tries to decode it, so this has to be
+                    # caught per item as well as around the whole loop.
+                    print(f"tinycinema: {spec}: decode failed\n{exc}", file=sys.stderr)
+                    if len(items) == 1:
+                        status = 1
+                        break
+                    status = 1
+                    index += 1
+                    continue
                 finally:
                     source.close()
                 totals.merge(player.stats)

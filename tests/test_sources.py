@@ -2,7 +2,11 @@ import numpy as np
 import pytest
 
 from tinycinema.render import create
-from tinycinema.sources import UnsupportedSourceError, open_source
+from tinycinema.sources import (
+    NoVideoStreamError,
+    UnsupportedSourceError,
+    open_source,
+)
 from tinycinema.sources.base import fit_box
 from tinycinema.sources.demo import PATTERNS, DemoSource
 from tinycinema.sources.ffmpeg import FFmpegSource, _parse_rate
@@ -192,3 +196,41 @@ def test_renderers_and_sources_agree_on_pixel_aspect():
         # a 1:1 source fitted into this box, then displayed, should stay square
         fw, fh = fit_box(500, 500, w, h, pixel_aspect=r.pixel_aspect)
         assert (fw * r.pixel_aspect) == pytest.approx(fh, rel=0.05)
+
+
+# -- files with nothing to show ---------------------------------------------
+
+
+def _probe_returning(monkeypatch, **fields):
+    from tinycinema.sources.base import MediaInfo
+
+    monkeypatch.setattr("tinycinema.sources.ffmpeg.require_ffmpeg", lambda: "/bin/ffmpeg")
+    monkeypatch.setattr(
+        "tinycinema.sources.ffmpeg.probe", lambda t: MediaInfo(title="x", **fields)
+    )
+
+
+def test_an_audio_only_file_is_refused_with_a_useful_message(monkeypatch):
+    """Otherwise ffmpeg fails later with 'Error opening output files: Invalid
+    argument', which tells the user nothing."""
+    _probe_returning(monkeypatch, has_audio=True, has_video=False)
+    with pytest.raises(NoVideoStreamError, match="audio-only file"):
+        FFmpegSource("song.mp3")
+
+
+def test_a_file_with_neither_stream_is_refused(monkeypatch):
+    _probe_returning(monkeypatch, has_audio=False, has_video=False)
+    with pytest.raises(NoVideoStreamError, match="no video stream"):
+        FFmpegSource("empty.mkv")
+
+
+def test_an_unreadable_probe_does_not_refuse_the_file(monkeypatch):
+    """has_video is None when the probe couldn't tell. Refusing then would
+    reject perfectly good videos on a box with no ffprobe."""
+    _probe_returning(monkeypatch, has_video=None)
+    FFmpegSource("mystery.mp4")  # must not raise
+
+
+def test_a_normal_video_is_accepted(monkeypatch):
+    _probe_returning(monkeypatch, has_audio=True, has_video=True)
+    FFmpegSource("clip.mp4")

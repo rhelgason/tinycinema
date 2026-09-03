@@ -595,12 +595,15 @@ class Terminal:
         self._entered = True
 
         if self.caps.is_tty:
-            fd = sys.stdin.fileno()
             try:
+                # fileno() belongs inside the guard: a wrapped stdin (pytest's
+                # capture, a Jupyter kernel, an embedding host) raises here, and
+                # that should mean "no raw mode", not a crash.
+                fd = sys.stdin.fileno()
                 self._saved_termios = termios.tcgetattr(fd)
                 # cbreak, not full raw: keeps ISIG so ctrl-c still interrupts.
                 tty.setcbreak(fd)
-            except (termios.error, ValueError, OSError):
+            except (termios.error, ValueError, OSError, AttributeError):
                 self._saved_termios = None
 
         parts = []
@@ -677,7 +680,7 @@ class Terminal:
         if self._saved_termios is not None:
             try:
                 termios.tcsetattr(sys.stdin.fileno(), termios.TCSADRAIN, self._saved_termios)
-            except (termios.error, ValueError, OSError):
+            except (termios.error, ValueError, OSError, AttributeError):
                 pass
             self._saved_termios = None
 

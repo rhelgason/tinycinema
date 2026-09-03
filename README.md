@@ -319,6 +319,8 @@ with video landing within **±1 ms** of the audio clock (drop threshold: 50 ms).
   debounced into a single restart.
 - **Image modes are bandwidth-hungry.** Comfortable locally, painful over SSH —
   kitty is ~10 MB/s at 30fps. Use `--fps 15`, or `sixel` at ~0.9 MB/s.
+- **Audio-only files are refused**, with a message saying so — there is
+  nothing to display. A visualiser would be a different project.
 - **Live streams** report no duration, so there's no progress bar and seeking is
   limited to what the server allows.
 
@@ -341,7 +343,7 @@ is written and dormant — it only fires on a `v*` tag — if that ever changes.
 python tools/verify.py              # first-run check on real hardware
 python tools/verify.py "https://youtu.be/..."   # ...including a real fetch
 
-pytest                              # 453 tests, no video, ffmpeg, audio or network
+pytest                              # 458 tests, no video, ffmpeg, audio or network
 python tools/make_demo_assets.py    # regenerate the README images
 tinycinema --demo --stats           # quick smoke test
 ```

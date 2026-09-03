@@ -24,6 +24,9 @@ class MediaInfo:
     fps: float = 30.0
     duration: float | None = None
     has_audio: bool = False
+    #: None when the probe couldn't tell -- only False means "definitely no
+    #: video stream", which is the case worth refusing.
+    has_video: bool | None = None
     seekable: bool = True
 
     @property

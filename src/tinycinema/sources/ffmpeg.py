@@ -37,6 +37,10 @@ class DecodeError(RuntimeError):
     pass
 
 
+class NoVideoStreamError(RuntimeError):
+    """The file is fine, there is simply nothing to show."""
+
+
 def _parse_rate(value: str | None) -> float | None:
     """ffprobe reports frame rates as fractions like '30000/1001'."""
     if not value:
@@ -97,6 +101,7 @@ def probe_via_ffmpeg(target: str) -> MediaInfo | None:
     info.has_audio = bool(_AUDIO_STREAM_RE.search(text))
 
     video = _VIDEO_STREAM_RE.search(text)
+    info.has_video = bool(video)
     if video:
         detail = video.group(1)
         dims = _DIMENSIONS_RE.search(detail)
@@ -153,6 +158,7 @@ def probe(target: str) -> MediaInfo:
 
     video = next((s for s in streams if s.get("codec_type") == "video"), None)
     info.has_audio = any(s.get("codec_type") == "audio" for s in streams)
+    info.has_video = video is not None
 
     if video:
         info.width = video.get("width")
@@ -181,6 +187,13 @@ class FFmpegSource(FrameSource):
         self.target = target
         self.loop = loop
         self.info = probe(target)
+        if self.info.has_video is False:
+            # Only refuse when the probe positively established there is no
+            # video stream; an unreadable probe leaves this None.
+            kind = "audio-only file" if self.info.has_audio else "file"
+            raise NoVideoStreamError(
+                f"{target}\nThat {kind} has no video stream to display."
+            )
         if fps:
             self.info.fps = fps
         self._proc: subprocess.Popen | None = None
