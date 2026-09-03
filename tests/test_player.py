@@ -352,6 +352,135 @@ def test_seek_never_goes_negative(clock):
     assert p._position == 0.0
 
 
+# -- volume, mute, stepping, playlist ---------------------------------------
+
+
+def test_volume_keys_adjust_and_clamp(clock):
+    p = make_player(clock, FakeSource(n=5), volume=100)
+    p._apply_key("-")
+    assert p.opts.volume == 95
+    for _ in range(50):
+        p._apply_key("-")
+    assert p.opts.volume == 0, "must clamp at zero, not go negative"
+    for _ in range(50):
+        p._apply_key("=")
+    assert p.opts.volume == 100, "must clamp at 100"
+
+
+def test_volume_changes_are_debounced(clock):
+    """ffplay takes its volume at launch, so each change relaunches it.
+    Doing that per keypress while a key is held would shred the audio."""
+    applied = []
+    p = make_player(clock, FakeSource(n=5), volume=100)
+    p.clock.set_volume = applied.append
+
+    p._apply_key("-")
+    p._apply_pending_volume()
+    assert applied == [], "must not fire immediately"
+
+    clock.t += player_mod.VOLUME_DEBOUNCE + 0.01
+    p._apply_pending_volume()
+    assert applied == [95]
+
+    p._apply_pending_volume()
+    assert applied == [95], "and only once per burst"
+
+
+def test_mute_restores_the_previous_volume(clock):
+    p = make_player(clock, FakeSource(n=5), volume=70)
+    p._apply_key("m")
+    assert p.opts.volume == 0 and p._muted
+    p._apply_key("m")
+    assert p.opts.volume == 70 and not p._muted
+
+
+def test_adjusting_volume_cancels_mute(clock):
+    p = make_player(clock, FakeSource(n=5), volume=70)
+    p._apply_key("m")
+    p._apply_key("=")
+    assert not p._muted and p.opts.volume == 5
+
+
+def test_step_forward_advances_exactly_one_frame(clock):
+    """Regression: the pause branch used to pull a frame before waiting, so a
+    single step showed one frame and then immediately jumped to the next."""
+    src = FakeSource(n=20, fps=30.0)
+    p = make_player(clock, src)
+    painted = []
+    real = p._paint
+
+    def spy(rgb, pts, *rest):
+        painted.append(pts)
+        return real(rgb, pts, *rest)
+
+    p._paint = spy
+    p._wait_while_paused = lambda: "quit"  # stop after the step settles
+
+    p._pending_keys.append(".")
+    p._play_once()
+
+    assert p._paused and not p._step_once
+    assert len(set(painted)) == 1, f"a step must advance one frame, showed {painted}"
+    assert painted[0] == 0.0
+
+
+def test_step_backward_seeks_by_one_frame(clock):
+    src = FakeSource(n=20, fps=30.0, duration=10.0)
+    p = make_player(clock, src)
+    p._paused = True
+    p._position = 5.0
+    assert p._step(-1) == "seek"
+    assert p._position < 5.0
+    assert p._position == pytest.approx(5.0 - 1.5 / 30.0)
+
+
+def test_step_backward_is_refused_when_not_seekable(clock):
+    src = FakeSource(n=20)
+    src.info.seekable = False
+    p = make_player(clock, src)
+    p._paused = True
+    assert p._step(-1) is None
+
+
+def test_a_restart_while_paused_stays_paused(clock):
+    """A backward step reopens the pipeline; it must not resume playing."""
+    src = FakeSource(n=20)
+    p = make_player(clock, src)
+    p._paused = True
+    p._restart_audio = True
+    p._wait_while_paused = lambda: "quit"
+    p._play_once()
+    assert clock.paused, "the clock must be re-paused after the restart"
+
+
+def test_playlist_keys_only_work_with_a_playlist(clock):
+    alone = make_player(clock, FakeSource(n=5), playlist=False)
+    assert alone._apply_key("n") is None
+    assert alone._apply_key("p") is None
+
+    inlist = make_player(FakeClock(), FakeSource(n=5), playlist=True)
+    assert inlist._apply_key("n") == "next"
+    assert inlist._apply_key("p") == "prev"
+
+
+def test_exit_reason_is_recorded_for_the_playlist_driver(clock):
+    p = make_player(clock, FakeSource(n=3), playlist=True)
+    p.run()
+    assert p.exit_reason == "eof"
+
+    q = make_player(FakeClock(), FakeSource(n=100), playlist=True)
+    q._pending_keys.append("n")
+    q.run()
+    assert q.exit_reason == "next"
+
+
+def test_hud_shows_volume_and_mute(clock):
+    p = make_player(clock, FakeSource(n=5, duration=60.0), hud=True, volume=40)
+    assert "40%" in p._hud_text(1.0, 140)
+    p._apply_key("m")
+    assert "muted" in p._hud_text(1.0, 140)
+
+
 # -- HUD --------------------------------------------------------------------
 
 

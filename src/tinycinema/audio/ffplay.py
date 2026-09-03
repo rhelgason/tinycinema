@@ -168,6 +168,22 @@ class FFplaySink:
         except (OSError, AttributeError, ValueError):
             pass
 
+    def set_volume(self, volume: int) -> None:
+        """ffplay takes its volume at launch and offers no way to change it.
+
+        So relaunch at the current position. That costs a short gap in the
+        sound, which is why the player debounces rapid adjustments into one
+        restart rather than one per keypress.
+        """
+        volume = max(0, min(100, volume))
+        if volume == self.volume:
+            return
+        self.volume = volume
+        if self._proc is None:
+            return
+        resume_from = self._report[0] if self._report else self._offset
+        self.start(resume_from)
+
     def stop(self) -> None:
         proc, self._proc = self._proc, None
         self._report = None

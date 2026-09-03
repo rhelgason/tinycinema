@@ -40,6 +40,10 @@ class AudioSink(Protocol):
 
     def stop(self) -> None: ...
 
+    def set_volume(self, volume: int) -> None:
+        """Change playback volume (0-100)."""
+        ...
+
     @property
     def active(self) -> bool:
         """False once playback has finished or failed."""
@@ -97,6 +101,9 @@ class Clock:
 
     def stop(self) -> None:
         self._started = False
+
+    def set_volume(self, volume: int) -> None:
+        """No-op: there is no sound to turn up."""
 
     @property
     def source(self) -> str:
@@ -218,6 +225,17 @@ class AudioClock(Clock):
         super().stop()
         self.sink.stop()
 
+    def set_volume(self, volume: int) -> None:
+        """Volume changes restart the sink, so treat it like a small seek."""
+        at = self.now()
+        self.sink.set_volume(volume)
+        # The sink may have relaunched; anything observed before now is stale.
+        self._anchor = None
+        self._anchor_floor = time.perf_counter()
+        self._started_at = time.perf_counter()
+        self._start_position = at
+        self._rebase(at)
+
     @property
     def fell_back(self) -> bool:
         """True if the audio sink never reported and we gave up on it."""
@@ -244,6 +262,9 @@ class NullSink:
         pass
 
     def stop(self) -> None:
+        pass
+
+    def set_volume(self, volume: int) -> None:
         pass
 
     @property

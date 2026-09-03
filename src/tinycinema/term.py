@@ -136,9 +136,11 @@ class FrameWriter:
     is 15ms a frame -- half the budget at 30fps, spent on nothing but boxing.
     """
 
-    def __init__(self, stream=None, *, synchronized: bool = True) -> None:
+    def __init__(self, stream=None, *, synchronized: bool = True, recorder=None) -> None:
         self._stream = stream if stream is not None else sys.stdout
         self._synchronized = synchronized
+        #: Optional tap that receives the same bytes the terminal does.
+        self.recorder = recorder
         self._prev_chars: np.ndarray | None = None
         self._prev_keys: np.ndarray | None = None
         # pen state, so we only emit SGR on an actual colour change
@@ -163,6 +165,8 @@ class FrameWriter:
         self._stream.write(payload)
         self._stream.flush()
         self.bytes_written += len(payload)
+        if self.recorder is not None:
+            self.recorder.write(payload)
 
     def encode(self, grid: CellGrid) -> str:
         """Build the byte string for this frame. Separated out so it's testable."""
@@ -257,8 +261,9 @@ class FrameWriter:
 class PlainWriter:
     """Unstyled output for pipes and redirects. No escapes, no cursor games."""
 
-    def __init__(self, stream=None) -> None:
+    def __init__(self, stream=None, *, recorder=None) -> None:
         self._stream = stream if stream is not None else sys.stdout
+        self.recorder = recorder
         self.bytes_written = 0
 
     def invalidate(self) -> None:  # noqa: D102 - interface parity

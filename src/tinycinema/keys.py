@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import select
 import sys
+import time
 
 # Escape sequences we care about, longest first so prefixes don't shadow.
 _SEQUENCES: dict[bytes, str] = {
@@ -51,6 +52,11 @@ class KeyReader:
     def poll(self, timeout: float = 0.0) -> list[str]:
         """Return every key pressed since the last call. Never blocks past `timeout`."""
         if not self._usable:
+            # Still honour the timeout. Callers poll in a loop (the pause idle
+            # does), and returning instantly turns that into a busy-wait that
+            # pins a core whenever stdin isn't a terminal.
+            if timeout > 0:
+                time.sleep(timeout)
             return []
         data = self._pending
         self._pending = b""

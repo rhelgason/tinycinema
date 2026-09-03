@@ -31,7 +31,10 @@ from .render import RenderOptions
 from .sources import FrameSource
 from .term import DEFAULT, CellGrid, FrameWriter, PlainWriter, Terminal
 
-Restart = Literal["quit", "eof", "resize", "reopen", "seek"]
+Restart = Literal["quit", "eof", "resize", "reopen", "seek", "next", "prev"]
+
+#: Reasons that end this file and hand control back to the playlist.
+PLAYLIST_MOVES = ("next", "prev")
 
 #: Restart reasons that only change the *picture*, so audio keeps playing.
 VIDEO_ONLY_RESTARTS = ("resize", "reopen")
@@ -42,6 +45,10 @@ DROP_AFTER_FRAMES = 1.5
 SEEK_SMALL = 5.0
 SEEK_MEDIUM = 10.0
 SEEK_LARGE = 60.0
+
+VOLUME_STEP = 5
+#: Relaunching ffplay per keypress would stutter; collapse a burst into one.
+VOLUME_DEBOUNCE = 0.3
 
 _HUD_FG = (200, 200, 200)
 _HUD_BG = (24, 24, 32)
@@ -60,6 +67,11 @@ class PlaybackOptions:
     width: int | None = None
     height: int | None = None
     audio: bool = True
+    volume: int = 100
+    #: True when there is somewhere to go with n/p.
+    playlist: bool = False
+    record: str | None = None
+    frames_dir: str | None = None
 
 
 @dataclass
@@ -70,9 +82,19 @@ class Stats:
     elapsed: float = 0.0
     bytes_written: int = 0
 
+    #: How many files these numbers cover, for playlists.
+    items: int = 1
+
     @property
     def fps(self) -> float:
         return self.rendered / self.elapsed if self.elapsed > 0 else 0.0
+
+    def merge(self, other: "Stats") -> None:
+        self.rendered += other.rendered
+        self.dropped += other.dropped
+        self.reopens += other.reopens
+        self.elapsed += other.elapsed
+        self.bytes_written += other.bytes_written
 
 
 class Player:
@@ -90,7 +112,22 @@ class Player:
         self.stats = Stats()
 
         self.is_tty = terminal.caps.is_tty
-        self.writer = FrameWriter() if self.is_tty else PlainWriter()
+        self.recorder = None
+        self.dumper = None
+        if opts.record:
+            from .record import CastRecorder
+
+            cols, rows = self._grid_size_for(terminal, opts)
+            self.recorder = CastRecorder(opts.record, cols, rows)
+        if opts.frames_dir:
+            from .record import FrameDumper
+
+            self.dumper = FrameDumper(opts.frames_dir)
+        self.writer = (
+            FrameWriter(recorder=self.recorder)
+            if self.is_tty
+            else PlainWriter(recorder=self.recorder)
+        )
         self.keys = KeyReader()
         self.renderer = render_mod.create(opts.mode, opts.render)
 
@@ -103,6 +140,13 @@ class Player:
         self._restart_audio = True
         self._message = ""
         self._message_until = 0.0
+        self._muted = False
+        self._volume_before_mute = opts.volume
+        self._volume_dirty_at: float | None = None
+        #: Set while single-stepping: render exactly one frame, then re-pause.
+        self._step_once = False
+        #: How the file ended, for the playlist driver.
+        self.exit_reason: Restart = "eof"
 
     # -- public ------------------------------------------------------------
 
@@ -111,11 +155,12 @@ class Player:
         try:
             while True:
                 reason = self._play_once()
-                if reason in ("quit", "eof"):
+                if reason in ("quit", "eof", *PLAYLIST_MOVES):
                     if reason == "eof" and self.opts.loop and not self.opts.once:
                         self._position = 0.0
                         self._restart_audio = True
                         continue
+                    self.exit_reason = reason
                     break
                 # Only a seek moves the audio; a resize or mode switch rebuilds
                 # the picture around audio that never stopped playing.
@@ -124,6 +169,8 @@ class Player:
         finally:
             self.clock.stop()
             self.source.close()
+            if self.recorder is not None:
+                self.recorder.close()
             self.stats.elapsed = time.perf_counter() - started
             self.stats.bytes_written = self.writer.bytes_written
         return 0
@@ -139,6 +186,10 @@ class Player:
 
         if self._restart_audio:
             self.clock.start(self._position)
+            # Starting the clock also un-pauses it; a restart triggered while
+            # paused (a frame step, say) must stay paused.
+            if self._paused:
+                self.clock.pause()
             self._restart_audio = False
         else:
             # Audio kept playing through the restart, so pick the video up
@@ -152,21 +203,43 @@ class Player:
         frame_interval = 1.0 / max(self.source.info.fps, 1.0)
         drop_threshold = DROP_AFTER_FRAMES * frame_interval
 
-        for pts, rgb in frames:
+        stream = iter(frames)
+        shown: tuple[float, object] | None = None  # last frame actually painted
+
+        while True:
             action = self._handle_keys()
             if action is not None:
                 return action
             if self.term.take_resize():
-                self._position = pts
                 return "resize"
 
+            # Check for pause *before* pulling a frame. Consuming one first and
+            # then waiting means a single frame-step advances twice: once for the
+            # step and once for the repaint that follows it.
             if self._paused:
-                # Repaint (the HUD needs updating) then idle until something happens.
-                self._paint(rgb, pts, cols, rows, video_rows)
+                if shown is not None:
+                    self._paint(shown[1], shown[0], cols, rows, video_rows)
                 action = self._wait_while_paused()
                 if action is not None:
-                    self._position = pts
                     return action
+                continue
+
+            self._apply_pending_volume()
+
+            try:
+                pts, rgb = next(stream)
+            except StopIteration:
+                return "eof"
+
+            if self._step_once:
+                # Single-stepping: show this frame now, then freeze on it.
+                self._paint(rgb, pts, cols, rows, video_rows)
+                self._position = pts
+                shown = (pts, rgb)
+                self._step_once = False
+                self._paused = True
+                self.clock.pause()
+                continue
 
             lag = self.clock.now() - pts
 
@@ -181,11 +254,10 @@ class Player:
 
             self._paint(rgb, pts, cols, rows, video_rows)
             self._position = pts
+            shown = (pts, rgb)
 
             if self.opts.once:
                 return "quit"
-
-        return "eof"
 
     # -- painting ----------------------------------------------------------
 
@@ -194,6 +266,8 @@ class Player:
         if self._hud_enabled and video_rows < rows:
             grid = self._compose_hud(grid, pts, cols, rows, video_rows)
         self.writer.draw(grid)
+        if self.dumper is not None:
+            self.dumper.write(grid.to_text())
         self.stats.rendered += 1
         self._recent.append(time.perf_counter())
 
@@ -223,6 +297,10 @@ class Player:
         if self.stats.dropped:
             right += f"  {self.stats.dropped} drop"
         # Which clock is driving matters when sync looks wrong, so surface it.
+        if self._muted:
+            right += "  muted"
+        elif self.opts.volume != 100:
+            right += f"  {self.opts.volume}%"
         right += f"  {self.renderer.name}  {self.clock.source}"
 
         space = cols - len(right) - 2
@@ -288,6 +366,20 @@ class Player:
             return self._cycle_mode(+1)
         if key == "R":
             return self._cycle_mode(-1)
+        if key in ("-", "_"):
+            return self._adjust_volume(-VOLUME_STEP)
+        if key in ("=", "+"):
+            return self._adjust_volume(+VOLUME_STEP)
+        if key == "m":
+            return self._toggle_mute()
+        if key == ".":
+            return self._step(+1)
+        if key == ",":
+            return self._step(-1)
+        if key == "n" and self.opts.playlist:
+            return "next"
+        if key == "p" and self.opts.playlist:
+            return "prev"
         if key in ("left", "right", "up", "down", "j", "l"):
             delta = {
                 "left": -SEEK_SMALL,
@@ -299,6 +391,61 @@ class Player:
             }[key]
             return self._seek(delta)
         return None
+
+    def _adjust_volume(self, delta: int) -> None:
+        self._muted = False
+        self.opts.volume = max(0, min(100, self.opts.volume + delta))
+        self._volume_dirty_at = time.perf_counter()
+        self._notify(f"volume {self.opts.volume}%")
+        return None
+
+    def _toggle_mute(self) -> None:
+        if self._muted:
+            self.opts.volume = self._volume_before_mute
+            self._muted = False
+            self._notify(f"volume {self.opts.volume}%")
+        else:
+            self._volume_before_mute = self.opts.volume
+            self.opts.volume = 0
+            self._muted = True
+            self._notify("muted")
+        self._volume_dirty_at = time.perf_counter()
+        return None
+
+    def _apply_pending_volume(self) -> None:
+        """Push a volume change to the sink once the user stops adjusting.
+
+        ffplay takes its volume at launch, so each change relaunches it. Doing
+        that per keypress while someone holds a key would shred the audio.
+        """
+        at = self._volume_dirty_at
+        if at is None or time.perf_counter() - at < VOLUME_DEBOUNCE:
+            return
+        self._volume_dirty_at = None
+        self.clock.set_volume(self.opts.volume)
+
+    def _step(self, direction: int) -> Restart | None:
+        """Advance or rewind exactly one frame. Only meaningful while paused."""
+        if not self._paused:
+            self._paused = True
+            self.clock.pause()
+        interval = 1.0 / max(self.source.info.fps, 1.0)
+        if direction > 0:
+            # The next frame is already queued up; just let one through.
+            self._step_once = True
+            self._paused = False
+            self._notify("step +1")
+            return None
+        if not self.source.info.seekable:
+            self._notify("not seekable")
+            return None
+        # Backwards means re-decoding: land a hair before the previous frame so
+        # the reopened stream's first frame is the one we want.
+        self._position = max(0.0, self._position - interval * 1.5)
+        self._step_once = True
+        self._paused = False
+        self._notify("step -1")
+        return "seek"
 
     def _cycle_mode(self, step: int) -> Restart:
         modes = render_mod.available_modes()
@@ -335,6 +482,13 @@ class Player:
         return None
 
     # -- geometry ----------------------------------------------------------
+
+    @staticmethod
+    def _grid_size_for(terminal, opts) -> tuple[int, int]:
+        """Grid size without needing a constructed Player (the recorder header
+        has to be written before the loop starts)."""
+        cols, rows = terminal.size()
+        return max(opts.width or cols, 8), max(opts.height or rows, 2)
 
     def _grid_size(self) -> tuple[int, int]:
         cols, rows = self.term.size()

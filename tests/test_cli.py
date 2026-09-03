@@ -27,7 +27,7 @@ def test_parse_time_rejects_nonsense(text):
 
 def test_defaults():
     a = build_parser().parse_args(["clip.mp4"])
-    assert a.source == "clip.mp4"
+    assert a.source == ["clip.mp4"]
     assert a.mode == "auto"
     assert a.color is True
     assert a.hud is True

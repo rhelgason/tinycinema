@@ -7,6 +7,7 @@ import sys
 
 from . import __version__
 from .audio import BACKENDS, make_clock
+from .playlist import expand
 from .render import RAMPS, RenderOptions, available_modes
 from .sources import (
     DEFAULT_QUALITY,
@@ -60,7 +61,8 @@ def build_parser() -> argparse.ArgumentParser:
         epilog=EPILOG,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    p.add_argument("source", nargs="?", help="file path, direct media URL, or - for stdin")
+    p.add_argument("source", nargs="*", default=[],
+                   help="file(s), directory, URL, or - for stdin")
 
     g = p.add_argument_group("input")
     g.add_argument("--demo", nargs="?", const="ball", choices=PATTERNS,
@@ -73,6 +75,7 @@ def build_parser() -> argparse.ArgumentParser:
                         f"(default: {DEFAULT_QUALITY})")
     g.add_argument("--no-cache", dest="cache", action="store_false",
                    help="stream URLs instead of downloading them first")
+    g.add_argument("--shuffle", action="store_true", help="randomise playlist order")
 
     g = p.add_argument_group("video")
     g.add_argument("--mode", default="auto", choices=["auto", *available_modes()],
@@ -102,6 +105,10 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--no-hud", dest="hud", action="store_false", help="hide the status bar")
     g.add_argument("--once", action="store_true", help="render one frame and exit")
     g.add_argument("--stats", action="store_true", help="print a timing summary on exit")
+    g.add_argument("--record", metavar="OUT.cast",
+                   help="record playback to an asciinema v2 file")
+    g.add_argument("--frames", dest="frames_dir", metavar="DIR",
+                   help="write each rendered frame to DIR as plain text")
 
     g = p.add_argument_group("misc")
     g.add_argument("--doctor", action="store_true", help="check dependencies and terminal support")
@@ -130,6 +137,11 @@ def main(argv: list[str] | None = None) -> int:
         parser.print_help()
         return 2
 
+    items = expand(args.source, shuffle=args.shuffle) if args.source else [None]
+    if not items:
+        print("tinycinema: nothing to play in that directory", file=sys.stderr)
+        return 1
+
     caps = detect_capabilities()
     mode = caps.best_mode() if args.mode == "auto" else args.mode
     # A pipe can't render colour or move a cursor, so a single plain frame is the
@@ -146,24 +158,6 @@ def main(argv: list[str] | None = None) -> int:
         dither=args.dither,
     )
 
-    try:
-        source = open_source(
-            args.source,
-            demo=args.demo,
-            fps=args.fps,
-            loop=args.loop,
-            quality=args.quality,
-            use_cache=args.cache,
-        )
-    except (
-        UnsupportedSourceError,
-        FFmpegMissingError,
-        YtDlpMissingError,
-        ResolveError,
-    ) as exc:
-        print(f"tinycinema: {exc}", file=sys.stderr)
-        return 1
-
     # Import late so `--doctor` and `--help` still work if something here is broken.
     from .player import PlaybackOptions, Player
 
@@ -172,45 +166,87 @@ def main(argv: list[str] | None = None) -> int:
         render=render_opts,
         fps=args.fps,
         hud=args.hud,
-        loop=args.loop,
+        # With several items, --loop repeats the playlist rather than one file.
+        loop=args.loop and len(items) == 1,
         start=args.start,
         once=once,
         stats=args.stats,
         width=args.width,
         height=args.height,
         audio=args.audio,
+        volume=args.volume,
+        playlist=len(items) > 1,
+        record=args.record,
+        frames_dir=args.frames_dir,
     )
 
-    clock = make_clock(
-        getattr(source, "target", args.source),
-        source.info,
-        # A single frame has no timeline to sync to, so never spin up audio.
-        enabled=args.audio and not once,
-        backend=args.audio_backend,
-        volume=args.volume,
-        loop=args.loop,
-    )
+    from .player import Stats
 
     status = 0
-    player = None
+    totals = Stats(items=0)
+    index = 0
     try:
         with Terminal(alt_screen=caps.is_tty and not once, hide_cursor=caps.is_tty) as term:
-            player = Player(source, term, playback, clock)
-            status = player.run()
+            while 0 <= index < len(items):
+                spec = items[index]
+                try:
+                    source = open_source(
+                        spec,
+                        demo=args.demo,
+                        fps=args.fps,
+                        loop=playback.loop,
+                        quality=args.quality,
+                        use_cache=args.cache,
+                    )
+                except (
+                    UnsupportedSourceError,
+                    FFmpegMissingError,
+                    YtDlpMissingError,
+                    ResolveError,
+                ) as exc:
+                    print(f"tinycinema: {exc}", file=sys.stderr)
+                    if len(items) == 1:
+                        return 1
+                    # One bad file shouldn't abandon the rest of the playlist.
+                    status = 1
+                    index += 1
+                    continue
+
+                clock = make_clock(
+                    getattr(source, "target", spec),
+                    source.info,
+                    # A single frame has no timeline to sync to.
+                    enabled=args.audio and not once,
+                    backend=args.audio_backend,
+                    volume=args.volume,
+                    loop=playback.loop,
+                )
+                try:
+                    player = Player(source, term, playback, clock)
+                    player.run()
+                finally:
+                    source.close()
+                totals.merge(player.stats)
+                totals.items += 1
+
+                if player.exit_reason == "quit" or once:
+                    break
+                index += -1 if player.exit_reason == "prev" else 1
+                if args.loop and len(items) > 1:
+                    index %= len(items)
     except KeyboardInterrupt:
         status = 130
     except DecodeError as exc:
         print(f"tinycinema: decode failed\n{exc}", file=sys.stderr)
         status = 1
-    finally:
-        source.close()
 
-    if args.stats and player is not None:
-        s = player.stats
+    if args.stats and totals.items:
+        s = totals
         total = s.rendered + s.dropped
         drop_pct = (100.0 * s.dropped / total) if total else 0.0
+        scope = f" across {s.items} files" if s.items > 1 else ""
         print(
-            f"\nrendered {s.rendered} frames in {s.elapsed:.1f}s "
+            f"\nrendered {s.rendered} frames in {s.elapsed:.1f}s{scope} "
             f"({s.fps:.1f} fps), dropped {s.dropped} ({drop_pct:.1f}%), "
             f"{s.reopens} pipeline restarts, {s.bytes_written / 1e6:.2f} MB written "
             f"({s.bytes_written / max(s.rendered, 1) / 1024:.1f} KB/frame)",
