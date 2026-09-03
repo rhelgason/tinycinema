@@ -303,7 +303,13 @@ def resolve(
 
 
 def _first_entry(entry):
-    """Playlists resolve to a list; take the first item until Phase 5."""
+    """Take the first video when a URL resolves to a playlist.
+
+    A local directory expands to every file in it, but a *remote* playlist does
+    not: expanding one means a network round trip during argument parsing,
+    before we even know yt-dlp is installed. Playing the first entry is the
+    predictable behaviour; listed as a known limitation in the README.
+    """
     if entry is None:
         raise ResolveError("no video found at that URL")
     while entry.get("_type") in ("playlist", "multi_video"):

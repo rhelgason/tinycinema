@@ -298,6 +298,21 @@ characters reinterprets as a Python string via `.view()` for free.
 Measured at 160×48 on a 30 fps source: **149/149 frames, 30.1 fps, zero drops**,
 with video landing within **±1 ms** of the audio clock (drop threshold: 50 ms).
 
+## Known limitations
+
+- **POSIX only.** The terminal layer uses `termios`/`tty`, so macOS and Linux
+  work and Windows does not. WSL is fine.
+- **A YouTube *playlist* URL plays only its first video.** Local directories
+  expand to every file in them; remote playlists don't, because expanding one
+  needs a network round trip during argument parsing.
+- **Changing volume causes a brief gap in the audio.** ffplay takes its volume
+  at launch and has no IPC, so each change relaunches it. Rapid changes are
+  debounced into a single restart.
+- **Image modes are bandwidth-hungry.** Comfortable locally, painful over SSH —
+  kitty is ~10 MB/s at 30fps. Use `--fps 15`, or `sixel` at ~0.9 MB/s.
+- **Live streams** report no duration, so there's no progress bar and seeking is
+  limited to what the server allows.
+
 ## Roadmap
 
 - [x] **Phase 0** — project skeleton, `--doctor`, generated test patterns

@@ -99,5 +99,9 @@ def open_source(
     if not path.exists():
         raise UnsupportedSourceError(f"no such file: {path}")
     if path.is_dir():
-        raise UnsupportedSourceError(f"{path} is a directory (playlists are Phase 5)")
+        # The CLI flattens directories via playlist.expand() before we get
+        # here, so this only fires for a direct API call.
+        raise UnsupportedSourceError(
+            f"{path} is a directory; expand it with playlist.expand() first"
+        )
     return FFmpegSource(str(path), fps=fps, loop=loop)
