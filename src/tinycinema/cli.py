@@ -32,8 +32,10 @@ examples:
   tinycinema --doctor              check ffmpeg and terminal support
 
 keys during playback:
-  space pause    q quit      r/R cycle render mode
-  h HUD          c colour    j/l seek -/+10s     arrows seek -/+5s / -/+60s
+  space pause    q quit        r/R cycle render mode   , . frame step
+  h HUD          c colour      s subtitles             m mute   -/= volume
+  j/l seek -/+10s              arrows seek -/+5s / -/+60s
+  n/p next/previous in a playlist
 
 note: when stdout is not a terminal, --once is implied and output is plain text.
 """
@@ -100,6 +102,11 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--volume", type=int, default=100, metavar="0-100")
     g.add_argument("--audio-backend", default="auto", choices=list(BACKENDS),
                    help="audio sink to use (default: auto)")
+
+    g = p.add_argument_group("subtitles")
+    g.add_argument("--subs", metavar="FILE", help="an .srt or .vtt file to display")
+    g.add_argument("--no-subs", dest="subtitles", action="store_false",
+                   help="don't look for or show subtitles")
 
     g = p.add_argument_group("output")
     g.add_argument("--no-hud", dest="hud", action="store_false", help="hide the status bar")
@@ -184,6 +191,8 @@ def main(argv: list[str] | None = None) -> int:
         playlist=len(items) > 1,
         record=args.record,
         frames_dir=args.frames_dir,
+        subtitles=args.subtitles,
+        subs_path=args.subs,
     )
 
     from .player import Stats

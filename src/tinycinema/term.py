@@ -302,11 +302,27 @@ class ImageWriter:
     def invalidate(self) -> None:
         self._last_hud = ""
 
-    def draw_image(self, payload: str, hud: str = "", hud_row: int = 0) -> None:
+    def draw_image(
+        self,
+        payload: str,
+        hud: str = "",
+        hud_row: int = 0,
+        caption: list[str] | None = None,
+        caption_row: int = 0,
+    ) -> None:
         parts = []
         if self._synchronized:
             parts.append(SYNC_BEGIN)
         parts.append(payload)
+        for offset, line in enumerate(caption or []):
+            # Drawn over the image; all three protocols allow text on top.
+            # Lines arrive already padded to the grid width by the caller, which
+            # is the only place that knows it.
+            row = max(caption_row + offset, 0)
+            parts.append(
+                f"\x1b[{row + 1};1H\x1b[38;2;245;245;235;48;2;10;10;14m"
+                f"{line}\x1b[0m"
+            )
         if hud:
             fg, bg = (200, 200, 200), (24, 24, 32)
             parts.append(

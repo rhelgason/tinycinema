@@ -481,6 +481,95 @@ def test_hud_shows_volume_and_mute(clock):
     assert "muted" in p._hud_text(1.0, 140)
 
 
+# -- subtitles ---------------------------------------------------------------
+
+
+def sub_player(clock, **opts):
+    from tinycinema.subtitles import Cue, SubtitleTrack
+
+    p = make_player(clock, FakeSource(n=5, fps=30.0), **opts)
+    p.subs = SubtitleTrack([Cue(0.0, 2.0, "hello there"), Cue(3.0, 4.0, "later")])
+    p._subs_on = True
+    return p
+
+
+def test_the_active_cue_is_wrapped_to_the_grid(clock):
+    p = sub_player(clock)
+    assert p._subtitle_lines(1.0, 40) == ["hello there"]
+    assert p._subtitle_lines(2.5, 40) == [], "nothing between cues"
+    assert p._subtitle_lines(3.5, 40) == ["later"]
+
+
+def test_a_narrow_grid_wraps_the_cue(clock):
+    p = sub_player(clock)
+    assert p._subtitle_lines(1.0, 14) == ["hello", "there"]
+
+
+def test_the_s_key_toggles_subtitles(clock):
+    p = sub_player(clock)
+    assert p._subtitle_lines(1.0, 40)
+    p._apply_key("s")
+    assert p._subtitle_lines(1.0, 40) == [], "toggled off"
+    p._apply_key("s")
+    assert p._subtitle_lines(1.0, 40)
+
+
+def test_the_s_key_says_so_when_there_are_none(clock):
+    p = make_player(clock, FakeSource(n=5), subtitles=False)
+    assert p.subs is None
+    assert p._apply_key("s") is None  # must not crash
+
+
+def test_no_subs_flag_skips_discovery(clock, monkeypatch):
+    called = []
+    monkeypatch.setattr("tinycinema.subtitles.discover",
+                        lambda *a, **k: called.append(a) or None)
+    make_player(clock, FakeSource(n=5), subtitles=False)
+    assert called == [], "--no-subs must not go looking, or hit ffmpeg"
+
+
+def test_a_cue_is_drawn_onto_the_bottom_of_the_picture(clock):
+    """Rendered into the grid, so it inherits the diffing and the recording."""
+    from tinycinema.player import _blit_caption
+    from tinycinema.term import CellGrid
+
+    grid = CellGrid.blank(10, 20)
+    _blit_caption(grid, ["hi"], video_rows=10)
+    text = grid.to_text().split("\n")
+    assert "hi" in text[-1], "the cue belongs on the last video row"
+    assert all("hi" not in row for row in text[:-1])
+
+
+def test_a_multi_line_cue_stacks_upward(clock):
+    from tinycinema.player import _blit_caption
+    from tinycinema.term import CellGrid
+
+    grid = CellGrid.blank(10, 30)
+    _blit_caption(grid, ["first", "second"], video_rows=10)
+    rows = grid.to_text().split("\n")
+    assert "first" in rows[-2] and "second" in rows[-1]
+
+
+def test_a_cue_is_centred(clock):
+    from tinycinema.player import _blit_caption
+    from tinycinema.term import CellGrid
+
+    grid = CellGrid.blank(4, 21)
+    _blit_caption(grid, ["abc"], video_rows=4)
+    row = grid.to_text().split("\n")[-1]
+    left = len(row) - len(row.lstrip())
+    right = len(row) - len(row.rstrip())
+    assert abs(left - right) <= 2, f"not centred: {row!r}"
+
+
+def test_a_caption_taller_than_the_picture_does_not_write_off_grid(clock):
+    from tinycinema.player import _blit_caption
+    from tinycinema.term import CellGrid
+
+    grid = CellGrid.blank(2, 20)
+    _blit_caption(grid, ["a", "b", "c", "d"], video_rows=2)  # must not raise
+
+
 # -- HUD --------------------------------------------------------------------
 
 

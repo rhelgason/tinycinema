@@ -171,6 +171,11 @@ tinycinema a.mp4 b.mkv c.webm
 # real pixels, if your terminal can do it (see --doctor)
 tinycinema clip.mp4 --mode kitty --fps 15
 
+# subtitles are picked up automatically: clip.srt, clip.en.vtt,
+# or a subtitle stream inside the container
+tinycinema clip.mkv
+tinycinema clip.mp4 --subs elsewhere.srt
+
 # record what you see
 tinycinema clip.mp4 --record demo.cast --no-hud
 
@@ -201,6 +206,7 @@ Built-in test patterns: `ball`, `plasma`, `bars`, `mandelbrot`.
 | <kbd>n</kbd> <kbd>p</kbd> | next / previous in the playlist |
 | <kbd>r</kbd> / <kbd>R</kbd> | cycle render mode forward / back |
 | <kbd>c</kbd> | toggle colour |
+| <kbd>s</kbd> | toggle subtitles |
 | <kbd>h</kbd> | toggle HUD |
 | <kbd>q</kbd> / <kbd>esc</kbd> | quit |
 
@@ -218,6 +224,9 @@ image modes   kitty | iterm | sixel          (opt-in; see --doctor)
 --gamma / --contrast / --brightness
 --dither          none | ordered
 --threshold F     on/off cutoff for braille mode
+
+--subs FILE       an .srt or .vtt to display
+--no-subs         don't look for or show subtitles
 
 --no-audio        play silently (video still syncs to a wall clock)
 --volume 0-100
@@ -332,7 +341,7 @@ is written and dormant — it only fires on a `v*` tag — if that ever changes.
 python tools/verify.py              # first-run check on real hardware
 python tools/verify.py "https://youtu.be/..."   # ...including a real fetch
 
-pytest                              # 365 tests, no video, tty, audio or network
+pytest                              # 431 tests, no video, tty, audio or network
 python tools/make_demo_assets.py    # regenerate the README images
 tinycinema --demo --stats           # quick smoke test
 ```

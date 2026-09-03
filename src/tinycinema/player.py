@@ -53,6 +53,11 @@ VOLUME_DEBOUNCE = 0.3
 _HUD_FG = (200, 200, 200)
 _HUD_BG = (24, 24, 32)
 
+_SUB_FG = (245, 245, 235)
+#: A dim band rather than transparent text: cues land on whatever the picture
+#: happens to be doing, and light-on-light is unreadable.
+_SUB_BG = (10, 10, 14)
+
 
 @dataclass
 class PlaybackOptions:
@@ -72,6 +77,8 @@ class PlaybackOptions:
     playlist: bool = False
     record: str | None = None
     frames_dir: str | None = None
+    subtitles: bool = True
+    subs_path: str | None = None
 
 
 @dataclass
@@ -161,6 +168,17 @@ class Player:
         self._step_once = False
         #: How the file ended, for the playlist driver.
         self.exit_reason: Restart = "eof"
+
+        self.subs = None
+        self._subs_on = opts.subtitles
+        if opts.subtitles:
+            from .subtitles import discover
+
+            try:
+                self.subs = discover(getattr(source, "target", None), opts.subs_path)
+            except OSError as exc:
+                # A missing or unreadable subtitle file should not stop playback.
+                self._notify(f"subtitles: {exc}")
 
     # -- public ------------------------------------------------------------
 
@@ -276,15 +294,25 @@ class Player:
     # -- painting ----------------------------------------------------------
 
     def _paint(self, rgb, pts: float, cols: int, rows: int, video_rows: int) -> None:
+        caption = self._subtitle_lines(pts, cols)
         if self.renderer.is_image:
             payload = self.renderer.encode_image(rgb, cols, video_rows)
             hud = self._hud_text(pts, cols) if self._hud_enabled and video_rows < rows else ""
-            self.writer.draw_image(payload, hud, hud_row=rows - 1)
+            self.writer.draw_image(
+                payload,
+                hud,
+                hud_row=rows - 1,
+                # Centre here: the writer has no idea how wide the grid is.
+                caption=[line.center(cols) for line in caption],
+                caption_row=video_rows - len(caption),
+            )
             if self.dumper is not None:
                 # An image mode's output is pixels, so dump pixels.
                 self.dumper.write_image(rgb)
         else:
             grid = self.renderer.render(rgb)
+            if caption:
+                _blit_caption(grid, caption, video_rows)
             if self._hud_enabled and video_rows < rows:
                 grid = self._compose_hud(grid, pts, cols, rows, video_rows)
             self.writer.draw(grid)
@@ -337,6 +365,17 @@ class Player:
         gap = max(cols - len(left) - len(right), 1)
         return (left + " " * gap + right)[:cols].ljust(cols)
 
+    def _subtitle_lines(self, pts: float, cols: int) -> list[str]:
+        if self.subs is None or not self._subs_on:
+            return []
+        text = self.subs.active_at(pts)
+        if not text:
+            return []
+        from .subtitles import wrap
+
+        # Leave a margin so a cue never runs edge to edge.
+        return wrap(text, max(cols - 4, 8))
+
     def _live_fps(self) -> float:
         if len(self._recent) < 2:
             return 0.0
@@ -379,6 +418,14 @@ class Player:
             self.opts.hud = not self.opts.hud
             self.writer.invalidate()
             return "reopen"  # the video area changes height
+        if key == "s":
+            if self.subs is None:
+                self._notify("no subtitles")
+            else:
+                self._subs_on = not self._subs_on
+                self._notify(f"subtitles {'on' if self._subs_on else 'off'}")
+                self.writer.invalidate()
+            return None
         if key == "c":
             self.opts.render.color = not self.opts.render.color
             self._notify(f"color {'on' if self.opts.render.color else 'off'}")
@@ -554,6 +601,19 @@ def _sleep_for(duration: float) -> None:
             while time.perf_counter() < target:  # short, bounded spin
                 pass
             return
+
+
+def _blit_caption(grid: CellGrid, lines: list[str], video_rows: int) -> None:
+    """Centre a cue on the bottom rows of the picture."""
+    rows, cols = grid.shape
+    first = min(video_rows, rows) - len(lines)
+    for offset, line in enumerate(lines):
+        row = first + offset
+        if row < 0:
+            continue
+        start = max((cols - len(line)) // 2, 0)
+        # Pad by one cell either side so the band reads as a band.
+        _blit(grid, row, max(start - 1, 0), f" {line} ", _SUB_FG, _SUB_BG)
 
 
 def _blit(grid: CellGrid, row: int, col: int, text: str, fg, bg) -> None:

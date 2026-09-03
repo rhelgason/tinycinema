@@ -770,6 +770,26 @@ There is a test pinning this so it cannot drift back.
 Relatedly, `r` cycles only through modes the terminal can actually display.
 Cycling into sixel on a terminal that cannot decode it sprays garbage.
 
+### Added afterwards
+
+**Subtitles** (SubRip and WebVTT), which section 11 listed as a stretch and
+called "easy, and nobody expects it". Both true. They come from an explicit
+`--subs`, a sidecar beside the media, or a stream inside the container pulled
+out with ffmpeg, and render as a centred band on the bottom rows of the picture.
+Rendering them into the CellGrid rather than writing them separately means they
+inherit the diffing and land in `--record` output for free.
+
+Most of the work is tolerating the format rather than parsing it: BOMs, mixed
+line endings, `<i>` and `{\an8}` tags, cues with no text, cues out of order.
+One cue failing to parse drops that cue and nothing else.
+
+**Terminal restore on a fatal signal.** `kill`, or closing a terminal tab, left
+the alt screen up and the cursor hidden -- a signal death skips atexit. Ctrl-C
+was always fine, because Python turns SIGINT into KeyboardInterrupt, which is
+also the shape of the fix: SIGTERM and SIGHUP now raise, so every existing
+`finally` runs and ffmpeg and ffplay are terminated rather than orphaned and
+left audible.
+
 ### Still open
 
 - Sixel's remaining 15ms is the per-colour pass over each band. Fewer palette
