@@ -237,6 +237,7 @@ class Player:
 
         stream = iter(frames)
         shown: tuple[float, object] | None = None  # last frame actually painted
+        first_frame = True
 
         while True:
             action = self._handle_keys()
@@ -262,6 +263,12 @@ class Player:
                 pts, rgb = next(stream)
             except StopIteration:
                 return "eof"
+
+            if first_frame:
+                # The clock has been running since before ffmpeg was spawned,
+                # so it already counts the decoder's startup. Hand it back.
+                first_frame = False
+                self.clock.resync(pts)
 
             if self._step_once:
                 # Single-stepping: show this frame now, then freeze on it.

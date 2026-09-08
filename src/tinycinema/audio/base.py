@@ -95,6 +95,21 @@ class Clock:
             # leave the loop with a pile of debt to work off.
             self._rebase(self._paused_at)
 
+    def resync(self, position: float) -> None:
+        """Treat `position` as now, discounting however long the decoder took.
+
+        Opening a pipeline is not free -- spawning ffmpeg, seeking and filling
+        the filtergraph measured ~300ms on a local file -- and the clock has
+        been running the whole time. Without this the first frame arrives
+        already a third of a second late, so it and the eight behind it are
+        dropped as stale: the opening moment of every file, seek, resize and
+        mode switch silently disappears.
+        """
+        if self._paused_at is not None:
+            self._paused_at = position
+            return
+        self._rebase(position)
+
     @property
     def paused(self) -> bool:
         return self._paused_at is not None
@@ -220,6 +235,30 @@ class AudioClock(Clock):
         self._last_returned = float("-inf")
         self._anchor_floor = time.perf_counter()
         self.sink.resume()
+
+    def resync(self, position: float) -> None:
+        """Discount decoder startup, but never overrule audio that is playing.
+
+        Once the sink has reported, it *is* the timeline. Shifting it back to
+        meet a video frame that arrived late would leave the picture
+        permanently ahead of the sound -- and a late frame there is honest
+        information: audio really did advance while the decoder was starting,
+        so the video really does need to skip to catch up.
+        """
+        if self._paused_at is not None:
+            self._paused_at = position
+            return
+        if self._anchor is not None:
+            return
+        # Still holding at the start position, waiting for the sink to speak.
+        # Hold at the frame we actually have instead. `_started_at` is left
+        # alone deliberately: the fallback deadline is measured from when the
+        # sink was launched, and restarting it here would extend a frozen first
+        # frame by another second when the sink is simply broken.
+        self._start_position = position
+        self._last_returned = float("-inf")
+        if self._fellback:
+            self._rebase(position)
 
     def stop(self) -> None:
         super().stop()

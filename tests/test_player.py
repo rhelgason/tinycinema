@@ -32,6 +32,7 @@ class FakeClock:
         self.t = start
         self._paused = False
         self.starts = []
+        self.resyncs = []
         self.pauses = 0
         self.resumes = 0
         self.stops = 0
@@ -41,6 +42,10 @@ class FakeClock:
         self.t = position
         self._paused = False
         self.starts.append(position)
+
+    def resync(self, position=0.0):
+        self.t = position
+        self.resyncs.append(position)
 
     def now(self):
         return self.t
