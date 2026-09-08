@@ -31,6 +31,64 @@ _SEQUENCES: dict[bytes, str] = {
     b"\x04": "ctrl-d",
 }
 
+#: Introducers whose payload runs to a String Terminator (ESC \) or a BEL:
+#: OSC replies, kitty graphics acks, DCS/sixel status.
+_STRING_INTRODUCERS = b"]P_^X"
+
+#: An escape sequence longer than this is not one we are waiting to complete,
+#: so stop holding the buffer and resynchronise.
+_MAX_PARTIAL = 32
+
+
+def _escape_length(data: bytes, i: int) -> int | None:
+    """Length of the escape sequence at data[i:], or None if it's still partial.
+
+    Terminals talk back. A Primary Device Attributes reply, a cursor position
+    report, a graphics acknowledgement, a bracketed paste marker -- all arrive
+    on stdin mixed in with real keystrokes. Dropping only the ESC and
+    resynchronising on the remainder feeds the *body* to the key handler, and
+    those bodies end in the bytes that matter most: `c` in a DA reply, `R` in a
+    cursor report, `h` in a paste marker, `=` in a kitty ack. The picture would
+    rearrange itself -- colour off, render mode cycled, HUD gone -- whenever the
+    terminal said anything at all. So skip the whole sequence.
+    """
+    n = len(data)
+    if i + 1 >= n:
+        return None
+    kind = data[i + 1]
+    if kind == 0x5B:  # CSI: parameter and intermediate bytes, then a final byte
+        j = i + 2
+        while j < n and 0x20 <= data[j] <= 0x3F:
+            j += 1
+        if j < n and 0x40 <= data[j] <= 0x7E:
+            return j + 1 - i
+        return None
+    if kind in _STRING_INTRODUCERS:
+        end = data.find(b"\x1b\\", i + 2)
+        if end != -1:
+            return end + 2 - i
+        end = data.find(b"\x07", i + 2)
+        if end != -1:
+            return end + 1 - i
+        return None
+    return 2  # a two-byte escape: ESC O, ESC (, and friends
+
+
+def _resync_after(data: bytes, i: int) -> int:
+    """Where to resume after an escape sequence that never terminated.
+
+    It is not one we are still waiting on, so it is malformed -- but its body
+    is no more a keystroke than a well-formed one's, so skip the body too. A
+    string sequence has no bounded shape, so nothing after it can be trusted.
+    """
+    n = len(data)
+    if i + 1 < n and data[i + 1] in _STRING_INTRODUCERS:
+        return n
+    j = i + 2
+    while j < n and 0x20 <= data[j] <= 0x3F:
+        j += 1
+    return min(j + 1, n)
+
 
 class KeyReader:
     """Drains whatever is waiting on stdin and decodes it into key names."""
@@ -103,10 +161,15 @@ class KeyReader:
 
             byte = data[i : i + 1]
             if byte == b"\x1b":
-                if n - i < 6:
-                    self._pending = data[i:]
-                    break
-                i += 1  # unknown CSI; drop the introducer and resync
+                length = _escape_length(data, i)
+                if length is None:
+                    if n - i < _MAX_PARTIAL:
+                        # Probably still arriving; let the next poll finish it.
+                        self._pending = data[i:]
+                        break
+                    i = _resync_after(data, i)
+                    continue
+                i += length
                 continue
             try:
                 keys.append(byte.decode("utf-8"))

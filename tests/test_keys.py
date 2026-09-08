@@ -39,6 +39,41 @@ def test_unknown_csi_does_not_emit_garbage():
     assert "\x1b" not in keys
 
 
+# Terminals answer back on stdin, mixed in with real keystrokes. Every reply
+# below used to be torn apart into its individual bytes, and the byte a reply
+# happens to end on is a live binding: `c` colour, `R` render mode, `h` HUD,
+# `=` volume. The picture rearranged itself whenever the terminal spoke.
+def test_a_device_attributes_reply_is_not_keystrokes():
+    assert decode(b"\x1b[?62;4;6c") == []
+
+
+def test_a_cursor_position_report_is_not_keystrokes():
+    assert decode(b"\x1b[24;80R") == []
+
+
+def test_a_kitty_graphics_ack_is_not_keystrokes():
+    assert decode(b"\x1b_Gi=1;OK\x1b\\") == []
+
+
+def test_an_osc_reply_is_not_keystrokes():
+    assert decode(b"\x1b]11;rgb:0000/0000/0000\x07") == []
+
+
+def test_bracketed_paste_markers_are_stripped_but_the_text_survives():
+    assert decode(b"\x1b[200~hi\x1b[201~") == ["h", "i"]
+
+
+def test_a_real_key_behind_a_reply_still_arrives():
+    assert decode(b"\x1b[?62;4;6cq") == ["q"]
+
+
+def test_an_unterminated_sequence_does_not_wedge_the_reader():
+    """Held only while it could still complete, or a stray ESC blocks input."""
+    r = KeyReader()
+    assert r._decode(b"\x1b[" + b"0" * 40) == []
+    assert r._pending == b""
+
+
 def test_truncated_sequence_is_held_for_the_next_poll():
     """A split escape sequence must not be misread as a bare ESC keypress."""
     r = KeyReader()
