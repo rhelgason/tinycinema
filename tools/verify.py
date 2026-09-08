@@ -15,6 +15,7 @@ yt-dlp step; leave it off to skip it.
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import sys
@@ -111,21 +112,39 @@ def summarise() -> None:
         print(f"{GREEN}Everything passed.{RESET}")
 
 
+def binary(name: str) -> str | None:
+    """Find a binary the same way tinycinema does, env override included.
+
+    Reporting `shutil.which` alone would call ffmpeg missing on exactly the
+    setups the override exists for -- a static build, or a sandbox.
+    """
+    override = os.environ.get(f"TINYCINEMA_{name.upper()}")
+    if override:
+        if os.path.isfile(override) and os.access(override, os.X_OK):
+            return override
+        return shutil.which(override)
+    return shutil.which(name)
+
+
 def main() -> int:
     url = sys.argv[1] if len(sys.argv) > 1 else None
-    tinycinema = shutil.which("tinycinema") or sys.executable
-    prefix = [] if shutil.which("tinycinema") else [sys.executable, "-m", "tinycinema"]
+    # Prefer the installed console script; fall back to the module in this
+    # checkout. Naming the interpreter *and* `-m tinycinema` is the whole
+    # command -- appending it again would hand the player its own interpreter
+    # as a file to play, which fails in a way that looks like a decode bug.
+    console = shutil.which("tinycinema")
+    base = [console] if console else [sys.executable, "-m", "tinycinema"]
 
     def tc(*args: str, timeout: int = 60) -> subprocess.CompletedProcess:
-        return run([*prefix, tinycinema, *args] if prefix else [tinycinema, *args], timeout)
+        return run([*base, *args], timeout)
 
     section("1. Dependencies")
-    ff = shutil.which("ffmpeg")
-    check("ffmpeg on PATH", bool(ff), ff or "brew install ffmpeg", fatal=True)
-    play = shutil.which("ffplay")
-    optional("ffplay on PATH", bool(play), play or "", "not found -> playback will be silent")
-    probe = shutil.which("ffprobe")
-    optional("ffprobe on PATH", bool(probe), probe or "",
+    ff = binary("ffmpeg")
+    check("ffmpeg available", bool(ff), ff or "brew install ffmpeg", fatal=True)
+    play = binary("ffplay")
+    optional("ffplay available", bool(play), play or "", "not found -> playback will be silent")
+    probe = binary("ffprobe")
+    optional("ffprobe available", bool(probe), probe or "",
              "not found -> falls back to parsing 'ffmpeg -i'")
     try:
         import yt_dlp
@@ -150,7 +169,7 @@ def main() -> int:
 
         section("3. Real ffmpeg decode")
         made = run([
-            "ffmpeg", "-y", "-loglevel", "error",
+            ff, "-y", "-loglevel", "error",
             "-f", "lavfi", "-i", "testsrc2=size=640x360:rate=30:duration=4",
             "-f", "lavfi", "-i", "sine=frequency=440:duration=4",
             "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", str(clip),
@@ -200,11 +219,7 @@ def main() -> int:
         section("5. Timed playback (real terminal)")
         if play:
             print(f"  {DIM}(you should hear a 440Hz tone for about 4 seconds){RESET}")
-        code, stats = run_pty(
-            [*prefix, tinycinema, str(clip), "--stats", "--no-hud"]
-            if prefix
-            else [tinycinema, str(clip), "--stats", "--no-hud"]
-        )
+        code, stats = run_pty([*base, str(clip), "--stats", "--no-hud"])
         line = next((x for x in stats.split("\n") if "rendered" in x), "").strip()
         rendered = 0
         if line:
