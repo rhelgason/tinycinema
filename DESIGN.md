@@ -810,3 +810,85 @@ reserving the name, which is not worth much unless someone else wants it.
 tag. The CI `package` job stays regardless, and matters more without PyPI rather
 than less: `pip install git+https://...` builds a wheel through exactly that
 path, so a packaging mistake breaks the real install method.
+
+## 19. What the pre-hardware pass found
+
+Everything below was found on a machine that still has no ffmpeg, by pointing
+`TINYCINEMA_FFMPEG` at the static build inside `imageio-ffmpeg` and driving the
+player through a real pty. Three of the four were invisible to 458 passing
+tests, and the first one invalidated the tool meant to catch the rest.
+
+### The verifier was playing its own interpreter
+
+`tools/verify.py` built its command as `[sys.executable, "-m", "tinycinema",
+sys.executable, ...]` whenever the console script was not on `PATH` -- which is
+the case for a plain checkout, which is exactly when someone runs it. The
+interpreter arrived as the first positional source. Nine of its ten reported
+failures were the harness decoding a Python binary.
+
+Worth stating plainly because it is the second time this has happened: **check
+the harness before believing its verdict.** In the same session a pty reader
+that slept 50ms per chunk turned 30fps into 0.7fps, and a numpy import that
+took 20 seconds on a loaded machine looked exactly like a hang, complete with a
+plausible thread stack.
+
+### The clock was started before the decoder
+
+`_play_once()` started the clock, *then* spawned ffmpeg. Launching it, seeking
+and filling the filtergraph measured **297ms**, all of it already on the
+timeline when the first frame arrived. That frame was 297ms late against a 50ms
+drop threshold, so it and the seven behind it were dropped as stale:
+
+```
+  frame   0 pts= 0.000  lag=  +297.1 ms  DROP
+  frame   1 pts= 0.033  lag=  +265.2 ms  DROP
+  ...
+  frame   7 pts= 0.233  lag=   +75.5 ms  DROP
+  frame   8 pts= 0.267  lag=   +43.0 ms
+```
+
+The opening third of a second of every file -- and of every seek, resize and
+mode switch, since each one reopens the pipeline. Measured 13-21% of a
+four-second clip, and nothing about it looked wrong on screen; it just started
+slightly into the video.
+
+`Clock.resync()` hands that time back, called once per pipeline with the first
+frame's PTS. The audio clock deliberately ignores it once its sink has
+reported: audio that is really playing owns the timeline, and a late frame
+*there* is honest information -- the sound did advance while the decoder was
+starting, so the picture does have to catch up. Drops went 13-21% -> 1.7-3.4%,
+all of what remains in the first 200ms.
+
+### The terminal was pressing keys
+
+Unknown escape sequences were resynchronised by dropping the `ESC` and decoding
+the remainder, so anything the terminal said back arrived as its individual
+bytes. The byte a reply ends on is the problem:
+
+| the terminal says | ends in | which is bound to |
+|---|---|---|
+| `ESC [ ? 62 ; 4 ; 6 c` — device attributes | `c` | colour off |
+| `ESC [ 24 ; 80 R` — cursor position | `R` | cycle render mode back |
+| `ESC [ 200 ~` — bracketed paste | `h` | hide the HUD |
+| `ESC _ G i = 1 ; OK ESC \` — kitty ack | `=` | volume up |
+
+A device-attributes reply is not hypothetical: `detect_sixel()` writes that
+query and gives up after 250ms, so a terminal slower than that -- or one over
+SSH -- answers into the key handler. Skipping the whole sequence (CSI to its
+final byte, string sequences to ST or BEL) is the fix.
+
+### Startup asked the same question twice
+
+`Terminal` re-detected capabilities that the CLI had already detected, so
+startup wrote the sixel query twice and waited out two 250ms timeouts on a
+terminal that never answers: **0.5s of a 1.12s startup**, spent asking twice.
+
+### Still open
+
+- The first frame of a pipeline still costs ~150ms more than a steady-state
+  one -- full repaint, cold SGR caches, first write to the terminal -- so a
+  handful of frames after it can still miss. It is a visible-once hiccup at
+  startup rather than a systematic loss, which is why it is here and not fixed.
+- `tests/test_io.py` spawns a fresh interpreter per test, and importing numpy
+  dominates. The backstop timeout is now generous enough that a loaded machine
+  does not fail the batch, but the tests are still the slow ones.
