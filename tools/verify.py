@@ -16,6 +16,7 @@ yt-dlp step; leave it off to skip it.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -221,19 +222,25 @@ def main() -> int:
             print(f"  {DIM}(you should hear a 440Hz tone for about 4 seconds){RESET}")
         code, stats = run_pty([*base, str(clip), "--stats", "--no-hud"])
         line = next((x for x in stats.split("\n") if "rendered" in x), "").strip()
-        rendered = 0
-        if line:
-            import re as _re
-
-            m = _re.search(r"rendered (\d+) frames", line)
-            rendered = int(m.group(1)) if m else 0
+        m = re.search(r"rendered (\d+) frames", line) if line else None
+        rendered = int(m.group(1)) if m else 0
         check("played to completion", code == 0, line[:150] or stats.strip()[:150])
         # 4s at 30fps is ~120 frames. A single frame means --once was implied,
         # i.e. the timing loop never ran at all.
         check("the timing loop actually ran", rendered > 60, f"{rendered} frames",
               fail_hint=f"only {rendered} frames -- playback did not run")
-        check("kept up with the clock", "(0.0%)" in line or "dropped 0 " in line,
-              fail_hint=line[:150])
+        # Not "zero drops": that is what an idle machine gives, but this also
+        # runs on shared CI runners, and failing on a couple of frames lost to
+        # someone else's build teaches you to ignore the check. The bug worth
+        # catching here is systematic -- the clock counting decoder startup cost
+        # 13-21% of a four-second clip -- so the line is drawn above the noise
+        # and well below that. Saturating every core on a laptop reaches ~6%.
+        dropped = re.search(r"dropped (\d+) \(([\d.]+)%\)", line) if line else None
+        drop_pct = float(dropped.group(2)) if dropped else 100.0
+        check("kept up with the clock", drop_pct <= 10.0,
+              f"dropped {drop_pct:.1f}%",
+              fail_hint=f"dropped {drop_pct:.1f}% -- more than dropped frames, "
+                        f"something is systematically late: {line[:100]}")
         if play:
             optional("audio clock engaged", "clock=audio" in stats or rendered > 60,
                      "", "could not confirm -- rerun with --verbose to see the clock")

@@ -87,12 +87,20 @@ jobs:
       #
       # Run it under `script` to get a real pty: piped stdout implies --once,
       # which would render a single frame and never exercise the timing loop.
+      #
+      # Which is why the redirect goes on `script` and not on tinycinema. A
+      # `> /dev/null` inside the quoted command is applied by the shell script
+      # spawns, so the player's stdout is the pipe after all -- pty or no pty --
+      # and it renders exactly one frame. Keep stdout on the pty, send the stats
+      # (stderr) to a file, and discard script's relayed typescript instead,
+      # which is the megabytes of escape codes we didn't want in the log.
       - name: Audio failure degrades instead of hanging
         timeout-minutes: 2
         shell: bash
         run: |
           script -qec "tinycinema /tmp/clip.mp4 --stats --no-hud \
-            --width 60 --height 20 > /dev/null" /dev/null | tr -d '\r' > out.txt || true
+            --width 60 --height 20 2> /tmp/stats.txt" /dev/null > /dev/null || true
+          tr -d '\r' < /tmp/stats.txt > out.txt
           cat out.txt
           python - <<'EOF'
           import re
@@ -120,9 +128,10 @@ jobs:
       - name: Recording and frame dumping
         shell: bash
         run: |
+          # Redirect on `script`, not on tinycinema -- see the note above.
           script -qec "tinycinema /tmp/clip.mp4 --no-audio --no-hud --fps 10 \
-            --width 40 --height 12 --record /tmp/r.cast --frames /tmp/frames \
-            > /dev/null" /dev/null
+            --width 40 --height 12 --record /tmp/r.cast --frames /tmp/frames" \
+            /dev/null > /dev/null
           python - <<'EOF'
           import json, pathlib
           lines = pathlib.Path("/tmp/r.cast").read_text().splitlines()
