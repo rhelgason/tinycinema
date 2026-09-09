@@ -339,6 +339,70 @@ def test_restarting_re_seeks_the_sink(fake_time):
     assert c.now() == pytest.approx(45.0)
 
 
+# -- discounting decoder startup ---------------------------------------------
+#
+# The clock is started before ffmpeg is spawned, so by the time the first frame
+# arrives the timeline already includes the few hundred ms the decoder took to
+# launch, seek and fill its filtergraph. Unchecked, that frame and everything
+# behind it are dropped as stale -- the opening moment of every file, seek,
+# resize and mode switch.
+
+
+def test_the_wall_clock_gives_back_the_startup_it_charged(fake_time):
+    c = WallClock()
+    c.start(0.0)
+    fake_time.t += 0.3  # ffmpeg starting up
+    assert c.now() == pytest.approx(0.3)
+    c.resync(0.0)  # ... and here is frame one, pts 0.0
+    assert c.now() == pytest.approx(0.0)
+
+
+def test_resync_while_paused_moves_the_frozen_position(fake_time):
+    c = WallClock()
+    c.start(10.0)
+    c.pause()
+    c.resync(12.0)
+    assert c.now() == pytest.approx(12.0)
+    assert c.paused
+
+
+def test_audio_that_is_playing_is_never_moved_to_meet_a_late_frame(fake_time):
+    """Once the sink reports, it owns the timeline. A late frame there is
+    honest: the sound really did advance while the decoder was starting, so the
+    picture really does have to catch up."""
+    sink = ScriptedSink()
+    c = AudioClock(sink)
+    c.start(0.0)
+    fake_time.t += 0.3
+    sink.report(0.3)
+    assert c.now() == pytest.approx(0.3)
+    c.resync(0.0)
+    assert c.now() == pytest.approx(0.3)
+
+
+def test_a_silent_sink_holds_at_the_frame_we_actually_have(fake_time):
+    sink = ScriptedSink()
+    c = AudioClock(sink)
+    c.start(0.0)
+    fake_time.t += 0.3  # the sink has not said anything yet
+    c.resync(7.5)
+    assert c.now() == pytest.approx(7.5)
+
+
+def test_resync_after_falling_back_rebases_the_wall_clock(fake_time):
+    sink = ScriptedSink()
+    sink.alive = False  # never going to report
+    c = AudioClock(sink)
+    c.start(0.0)
+    fake_time.t += 2.0
+    c.now()  # trips the fallback, which rebases the wall clock at 0.0
+    assert c.fell_back
+    fake_time.t += 0.3  # the decoder is still starting
+    assert c.now() == pytest.approx(0.3)
+    c.resync(0.0)
+    assert c.now() == pytest.approx(0.0)
+
+
 # -- null sink --------------------------------------------------------------
 
 
@@ -435,6 +499,32 @@ def test_ffplay_reports_nothing_while_paused(monkeypatch):
     sink._report = (5.0, real_time.perf_counter())
     sink._paused = True
     assert sink.anchor() is None
+
+
+def test_a_superseded_reader_cannot_publish(monkeypatch):
+    """A volume change restarts ffplay while the old reader is still blocked in
+    read(). Once its pipe closes the descriptor is free to be reused by the new
+    process, so a reader that trusted `self` would report the new process's
+    position stamped with the old seek offset."""
+    monkeypatch.setattr("tinycinema.audio.ffplay.ffplay_path", lambda: "/bin/ffplay")
+    sink = FFplaySink("clip.mp4")
+
+    class FakePipe:
+        def __init__(self, data):
+            self.data = data
+
+        def fileno(self):
+            return -1
+
+    old = types.SimpleNamespace(stderr=FakePipe(b""))
+    new = types.SimpleNamespace(stderr=FakePipe(b""))
+    sink._proc = new  # the restart already happened
+
+    monkeypatch.setattr(
+        "tinycinema.audio.ffplay.os.read", lambda fd, n: b"   9.99 M-A:  0.000 fd=0\r"
+    )
+    sink._pump(old, offset=60.0)
+    assert sink._report is None, "the old reader wrote a position for a dead process"
 
 
 # -- backend selection ------------------------------------------------------

@@ -112,16 +112,27 @@ class FFplaySink:
         except OSError:
             self._proc = None
             return
-        self._reader = threading.Thread(target=self._pump, daemon=True)
+        self._reader = threading.Thread(
+            target=self._pump, args=(self._proc, self._offset), daemon=True
+        )
         self._reader.start()
 
-    def _pump(self) -> None:
-        proc = self._proc
-        if proc is None or proc.stderr is None:
+    def _pump(self, proc: subprocess.Popen, offset: float) -> None:
+        """Read one process's status lines. Bound to that process on purpose.
+
+        A volume change restarts ffplay, and the pump for the old one is still
+        blocked in read() when the new one launches. Once the old pipe is
+        closed its descriptor number is free to be reused -- by the new
+        process's stderr -- so a pump that trusted `self` would read the new
+        process's output, steal bytes from the live pump, and stamp them with
+        the old seek offset. Hold the process and offset we were started with,
+        and never publish once superseded.
+        """
+        if proc.stderr is None:
             return
         fd = proc.stderr.fileno()
         buf = b""
-        while True:
+        while self._proc is proc:
             try:
                 chunk = os.read(fd, 4096)
             except (OSError, ValueError):
@@ -135,7 +146,8 @@ class FFplaySink:
                     reported = float(matches[-1])  # most recent wins
                 except ValueError:
                     continue
-                self._report = (reported + self._offset, time.perf_counter())
+                if self._proc is proc:
+                    self._report = (reported + offset, time.perf_counter())
 
     # -- clock -------------------------------------------------------------
 

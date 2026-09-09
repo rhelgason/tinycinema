@@ -174,3 +174,20 @@ def test_non_tty_writes_no_escapes(capsys):
     with Terminal():
         pass
     assert capsys.readouterr().out == ""
+
+
+def test_supplied_capabilities_are_not_redetected(monkeypatch):
+    """Detection writes a device-attributes query and waits up to 250ms for a
+    reply. The CLI has already detected by the time it builds a Terminal, so
+    doing it again asked the terminal the same question twice and doubled the
+    dead time on any terminal that never answers."""
+    import tinycinema.term as term_mod
+
+    calls = []
+    monkeypatch.setattr(
+        term_mod, "detect_capabilities", lambda *a, **k: calls.append(1) or caps()
+    )
+    given = caps()
+    t = Terminal(alt_screen=False, hide_cursor=False, caps=given)
+    assert t.caps is given
+    assert calls == []

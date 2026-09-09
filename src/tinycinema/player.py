@@ -63,7 +63,6 @@ _SUB_BG = (10, 10, 14)
 class PlaybackOptions:
     mode: str = "halfblock"
     render: RenderOptions = field(default_factory=RenderOptions)
-    fps: float | None = None
     hud: bool = True
     loop: bool = False
     start: float = 0.0
@@ -532,11 +531,15 @@ class Player:
         if self.renderer.is_image != was_image:
             # Cells and bitmaps need different writers entirely.
             if self.renderer.is_image:
-                self.writer = ImageWriter(recorder=self.recorder)
+                writer = ImageWriter(recorder=self.recorder)
             elif self.is_tty:
-                self.writer = FrameWriter(recorder=self.recorder)
+                writer = FrameWriter(recorder=self.recorder)
             else:
-                self.writer = PlainWriter(recorder=self.recorder)
+                writer = PlainWriter(recorder=self.recorder)
+            # Carry the byte count across, or --stats reports only whatever was
+            # written since the last mode switch.
+            writer.bytes_written = self.writer.bytes_written
+            self.writer = writer
         self._notify(f"mode: {modes[i]}")
         return "reopen"  # pixel dimensions differ per mode
 

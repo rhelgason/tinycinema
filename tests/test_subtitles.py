@@ -279,6 +279,19 @@ def test_discover_falls_back_to_an_embedded_track(tmp_path, monkeypatch):
     assert t is not None and len(t) == 2
 
 
+def test_discover_does_not_probe_a_remote_url_for_embedded_subtitles(monkeypatch):
+    """Extraction opens the stream and reads it until it can rule subtitles
+    out. Over the network that is seconds of dead air before the first frame,
+    for a track that usually isn't there."""
+    called = []
+    monkeypatch.setattr(
+        "tinycinema.subtitles.extract_embedded",
+        lambda m, index=0: called.append(m) or SubtitleTrack(parse(SRT)),
+    )
+    assert discover("https://example.com/clip.mp4") is None
+    assert called == []
+
+
 # -- embedded extraction -----------------------------------------------------
 
 

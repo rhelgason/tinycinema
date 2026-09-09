@@ -252,7 +252,14 @@ def test_an_unusable_reader_still_honours_the_timeout():
 # -- the terminal, under a real pty ------------------------------------------
 
 
-def run_under_pty(script: str, cols: int = 80, rows: int = 24, wait: float = 2.5):
+#: Backstop only -- every script here exits on its own, and the helper returns
+#: as soon as it does, so a generous bound costs nothing in the normal case. It
+#: has to cover a cold interpreter importing numpy, which took seconds on a
+#: loaded machine and made these tests fail in a batch while passing one by one.
+_PTY_WAIT = 30.0
+
+
+def run_under_pty(script: str, cols: int = 80, rows: int = 24, wait: float = _PTY_WAIT):
     master, slave = pty.openpty()
     termios_pkg = termios
     import fcntl

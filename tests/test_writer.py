@@ -159,6 +159,22 @@ def test_plain_writer_emits_no_escapes():
     assert buf.getvalue() == "ooo\nooo\n"
 
 
+def test_plain_writer_feeds_its_recorder():
+    """--record with redirected output used to write a cast with no frames."""
+    import io
+
+    class Tap:
+        def __init__(self):
+            self.chunks = []
+
+        def write(self, data):
+            self.chunks.append(data)
+
+    tap = Tap()
+    PlainWriter(io.StringIO(), recorder=tap).draw(grid(2, 3, "o"))
+    assert tap.chunks == ["ooo\nooo\n"]
+
+
 def test_cell_grid_to_text():
     g = CellGrid.blank(2, 2)
     g.chars[0, 0] = ord("a")

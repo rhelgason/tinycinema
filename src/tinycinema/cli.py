@@ -178,7 +178,8 @@ def main(argv: list[str] | None = None) -> int:
     playback = PlaybackOptions(
         mode=mode,
         render=render_opts,
-        fps=args.fps,
+        # --fps is applied by the decoder's fps filter, not here: capping the
+        # rate at the source means we never decode a frame we would only drop.
         hud=args.hud,
         # With several items, --loop repeats the playlist rather than one file.
         loop=args.loop and len(items) == 1,
@@ -202,7 +203,9 @@ def main(argv: list[str] | None = None) -> int:
     totals = Stats(items=0)
     index = 0
     try:
-        with Terminal(alt_screen=caps.is_tty and not once, hide_cursor=caps.is_tty) as term:
+        with Terminal(
+            alt_screen=caps.is_tty and not once, hide_cursor=caps.is_tty, caps=caps
+        ) as term:
             while 0 <= index < len(items):
                 spec = items[index]
                 try:

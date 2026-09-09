@@ -187,6 +187,13 @@ def discover(media: str | None, explicit: str | None = None) -> SubtitleTrack | 
             note(f"subtitles: {len(track)} cues from {sidecar}")
             return track
 
+    # Only for something already on disk. Against a remote URL this opens a
+    # network stream and reads it far enough to establish there are no
+    # subtitles -- seconds of dead air before the first frame, for a track that
+    # usually isn't there. Downloaded URLs are cached to a local file by then,
+    # so the ordinary YouTube path still gets this.
+    if not Path(media).is_file():
+        return None
     embedded = extract_embedded(media)
     if embedded is not None and embedded.cues:
         note(f"subtitles: {len(embedded)} cues embedded in the container")

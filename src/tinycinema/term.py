@@ -297,10 +297,9 @@ class ImageWriter:
         self._synchronized = synchronized
         self.recorder = recorder
         self.bytes_written = 0
-        self._last_hud = ""
 
-    def invalidate(self) -> None:
-        self._last_hud = ""
+    def invalidate(self) -> None:  # noqa: D102 - nothing is diffed, so nothing to drop
+        pass
 
     def draw_image(
         self,
@@ -330,7 +329,6 @@ class ImageWriter:
                 f"\x1b[38;2;{fg[0]};{fg[1]};{fg[2]};48;2;{bg[0]};{bg[1]};{bg[2]}m"
                 f"{hud}\x1b[0m"
             )
-            self._last_hud = hud
         if self._synchronized:
             parts.append(SYNC_END)
         out = "".join(parts)
@@ -360,6 +358,8 @@ class PlainWriter:
         self._stream.write(text)
         self._stream.flush()
         self.bytes_written += len(text)
+        if self.recorder is not None:
+            self.recorder.write(text)
 
 
 def _runs(cols: np.ndarray) -> list[tuple[int, int]]:
@@ -538,8 +538,18 @@ class Terminal:
     hard crash still leaves the user with a working shell.
     """
 
-    def __init__(self, *, alt_screen: bool = True, hide_cursor: bool = True) -> None:
-        self.caps = detect_capabilities()
+    def __init__(
+        self,
+        *,
+        alt_screen: bool = True,
+        hide_cursor: bool = True,
+        caps: Capabilities | None = None,
+    ) -> None:
+        # Detection is not free: the sixel probe writes a device-attributes
+        # query and waits up to 250ms for an answer that many terminals never
+        # send. Callers that have already detected should pass the result in
+        # rather than pay for it, and ask the terminal, twice.
+        self.caps = caps if caps is not None else detect_capabilities()
         self._alt_screen = alt_screen and self.caps.is_tty
         self._hide_cursor = hide_cursor and self.caps.is_tty
         self._saved_termios = None
