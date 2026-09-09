@@ -359,3 +359,97 @@ def test_switching_to_an_image_mode_swaps_the_writer():
     while player.renderer.is_image:
         player._cycle_mode(+1)
     assert isinstance(player.writer, FrameWriter)
+
+
+# -- ImageWriter ------------------------------------------------------------
+#
+# Nothing called draw_image before this; the tests above only checked that the
+# player *selects* an ImageWriter. But this is what puts subtitles and the HUD
+# on top of a kitty/iTerm2/sixel frame, and it is the only writer that does so
+# with raw escapes rather than through a CellGrid.
+
+
+def _image_writer(**kw):
+    import io
+
+    from tinycinema.term import ImageWriter
+
+    buf = io.StringIO()
+    return ImageWriter(buf, **kw), buf
+
+
+def test_image_writer_emits_the_payload_verbatim():
+    w, buf = _image_writer(synchronized=False)
+    w.draw_image("<PAYLOAD>")
+    assert buf.getvalue() == "<PAYLOAD>"
+    assert w.bytes_written == len("<PAYLOAD>")
+
+
+def test_image_writer_brackets_a_frame_with_synchronised_update():
+    from tinycinema.term import SYNC_BEGIN, SYNC_END
+
+    w, buf = _image_writer(synchronized=True)
+    w.draw_image("<PAYLOAD>")
+    out = buf.getvalue()
+    assert out.startswith(SYNC_BEGIN) and out.endswith(SYNC_END)
+    assert out.index("<PAYLOAD>") > out.index(SYNC_BEGIN)
+
+
+def test_captions_are_drawn_after_the_image_so_they_land_on_top():
+    w, buf = _image_writer(synchronized=False)
+    w.draw_image("<IMG>", caption=["hello there"], caption_row=4)
+    out = buf.getvalue()
+    assert out.index("hello there") > out.index("<IMG>")
+    assert "\x1b[5;1H" in out, "caption_row is 0-based, the escape is 1-based"
+    assert out.rstrip().endswith("\x1b[0m"), "must not leave the caption colour set"
+
+
+def test_each_caption_line_gets_its_own_row():
+    w, buf = _image_writer(synchronized=False)
+    w.draw_image("<IMG>", caption=["line one", "line two"], caption_row=2)
+    out = buf.getvalue()
+    assert "\x1b[3;1H" in out and "\x1b[4;1H" in out
+
+
+def test_a_caption_row_above_the_screen_is_clamped_not_negative():
+    """A tall cue on a short grid would otherwise emit row 0 or below."""
+    w, buf = _image_writer(synchronized=False)
+    w.draw_image("<IMG>", caption=["a", "b"], caption_row=-1)
+    assert "\x1b[0;1H" not in buf.getvalue()
+    assert "\x1b[1;1H" in buf.getvalue()
+
+
+def test_the_hud_is_drawn_at_its_row_and_resets_afterwards():
+    w, buf = _image_writer(synchronized=False)
+    w.draw_image("<IMG>", hud="|> clip.mp4", hud_row=11)
+    out = buf.getvalue()
+    assert "\x1b[12;1H" in out
+    assert "|> clip.mp4" in out
+    assert out.endswith("\x1b[0m")
+
+
+def test_an_empty_hud_draws_nothing():
+    w, buf = _image_writer(synchronized=False)
+    w.draw_image("<IMG>", hud="", hud_row=11)
+    assert buf.getvalue() == "<IMG>"
+
+
+def test_the_recorder_sees_exactly_what_the_terminal_sees():
+    class Tap:
+        def __init__(self):
+            self.chunks = []
+
+        def write(self, data):
+            self.chunks.append(data)
+
+    tap = Tap()
+    w, buf = _image_writer(synchronized=False, recorder=tap)
+    w.draw_image("<IMG>", hud="bar", hud_row=1)
+    assert tap.chunks == [buf.getvalue()]
+
+
+def test_bytes_written_accumulates_across_frames():
+    w, buf = _image_writer(synchronized=False)
+    w.draw_image("aaa")
+    w.draw_image("bbbb")
+    assert w.bytes_written == 7

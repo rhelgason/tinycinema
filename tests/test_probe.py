@@ -173,3 +173,119 @@ def test_probe_never_shells_out_for_stdin(monkeypatch):
     monkeypatch.setattr("tinycinema.sources.ffmpeg.probe_via_ffmpeg", explode)
     info = probe("-")
     assert not info.seekable
+
+
+# -- probe() via ffprobe -----------------------------------------------------
+#
+# The primary metadata path: any ordinary ffmpeg install has ffprobe, so this is
+# what runs for most people. Only the *fallback* paths were covered before,
+# which meant title, duration, dimensions, fps and has_audio -- and therefore
+# the progress bar, seek clamping and whether the audio clock engages at all --
+# rested on nothing.
+#
+# Unlike the `ffmpeg -i` fixtures above, these payloads are written to ffprobe's
+# JSON schema rather than captured from a run, because the machine this was
+# written on has no ffprobe. The shape is stable and documented, but a captured
+# sample would be strictly better if one is ever to hand.
+
+
+@pytest.fixture
+def fake_ffprobe(monkeypatch):
+    def use(payload: dict, returncode: int = 0):
+        import json as _json
+
+        class Result:
+            pass
+
+        Result.returncode = returncode
+        Result.stdout = _json.dumps(payload).encode()
+        Result.stderr = b""
+
+        monkeypatch.setattr("tinycinema.sources.ffmpeg.ffprobe_path", lambda: "/bin/ffprobe")
+        monkeypatch.setattr("tinycinema.sources.ffmpeg.subprocess.run", lambda *a, **k: Result())
+
+        def explode(target):
+            raise AssertionError("ffprobe succeeded -- must not fall back to ffmpeg -i")
+
+        monkeypatch.setattr("tinycinema.sources.ffmpeg.probe_via_ffmpeg", explode)
+
+    return use
+
+
+def test_ffprobe_reads_every_field_we_rely_on(fake_ffprobe):
+    fake_ffprobe({
+        "streams": [
+            {"codec_type": "video", "codec_name": "h264", "width": 1920, "height": 1080,
+             "avg_frame_rate": "30000/1001", "r_frame_rate": "30000/1001"},
+            {"codec_type": "audio", "codec_name": "aac"},
+        ],
+        "format": {"duration": "596.474195", "tags": {"title": "Big Buck Bunny"}},
+    })
+    info = probe("clip.mp4")
+    assert info.title == "Big Buck Bunny"
+    assert (info.width, info.height) == (1920, 1080)
+    assert info.fps == pytest.approx(29.97, abs=0.01)
+    assert info.duration == pytest.approx(596.474195)
+    assert info.has_audio is True
+    assert info.has_video is True
+
+
+def test_ffprobe_falls_back_to_r_frame_rate(fake_ffprobe):
+    """avg_frame_rate is 0/0 for a stream ffprobe couldn't average."""
+    fake_ffprobe({
+        "streams": [{"codec_type": "video", "width": 640, "height": 360,
+                     "avg_frame_rate": "0/0", "r_frame_rate": "25/1"}],
+        "format": {},
+    })
+    assert probe("clip.mp4").fps == pytest.approx(25.0)
+
+
+def test_ffprobe_takes_the_stream_duration_when_the_container_has_none(fake_ffprobe):
+    fake_ffprobe({
+        "streams": [{"codec_type": "video", "width": 8, "height": 8, "duration": "12.5"}],
+        "format": {},
+    })
+    assert probe("clip.mp4").duration == pytest.approx(12.5)
+
+
+def test_ffprobe_marks_an_audio_only_file_as_having_no_video(fake_ffprobe):
+    """has_video False is what makes FFmpegSource refuse it with a message."""
+    fake_ffprobe({"streams": [{"codec_type": "audio"}], "format": {"duration": "180.0"}})
+    info = probe("song.mp3")
+    assert info.has_video is False
+    assert info.has_audio is True
+
+
+def test_ffprobe_keeps_the_filename_when_there_is_no_title_tag(fake_ffprobe):
+    fake_ffprobe({
+        "streams": [{"codec_type": "video", "width": 8, "height": 8}],
+        "format": {"tags": {"encoder": "Lavf"}},
+    })
+    assert probe("/some/where/holiday.mkv").title == "holiday.mkv"
+
+
+def test_ffprobe_rejects_an_absurd_frame_rate(fake_ffprobe):
+    """A malformed rate must not make frame_interval ~0 and spin the loop."""
+    fake_ffprobe({
+        "streams": [{"codec_type": "video", "width": 8, "height": 8,
+                     "avg_frame_rate": "90000/1"}],
+        "format": {},
+    })
+    assert probe("clip.mp4").fps == 30.0  # the MediaInfo default, not 90000
+
+
+def test_ffprobe_returning_junk_falls_back(monkeypatch):
+    """Truncated JSON must degrade to the ffmpeg -i parser, not raise."""
+    class Result:
+        returncode = 0
+        stdout = b'{"streams": ['
+        stderr = b""
+
+    monkeypatch.setattr("tinycinema.sources.ffmpeg.ffprobe_path", lambda: "/bin/ffprobe")
+    monkeypatch.setattr("tinycinema.sources.ffmpeg.subprocess.run", lambda *a, **k: Result())
+    called = []
+    monkeypatch.setattr(
+        "tinycinema.sources.ffmpeg.probe_via_ffmpeg", lambda t: called.append(t) or None
+    )
+    probe("clip.mp4")
+    assert called == ["clip.mp4"]

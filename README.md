@@ -478,7 +478,7 @@ is written and dormant — it only fires on a `v*` tag — if that ever changes.
 python tools/verify.py              # first-run check on real hardware
 python tools/verify.py "https://youtu.be/..."   # ...including a real fetch
 
-pytest                              # 474 tests, no video, ffmpeg, audio or network
+pytest                              # 490 tests, no video, ffmpeg, audio or network
 python tools/make_demo_assets.py    # regenerate the README images
 tinycinema --demo --stats           # quick smoke test
 ```
@@ -488,7 +488,7 @@ touch — see [First run on a new machine](#first-run-on-a-new-machine) for what
 it checks and how to read its output.
 
 The test suite itself needs no media, ffmpeg, sound card or network connection —
-87% coverage, and the parts that genuinely need something on the other end get a
+88% coverage, and the parts that genuinely need something on the other end get a
 committed fake ffplay, `os.pipe()` and `pty.openpty()` rather than being skipped: the writer is verified with golden byte strings, the renderers with
 exact cell grids, the image protocols by decoding their payloads back to pixels,
 both clocks by hand-cranking them, and `ffmpeg -i` parsing against captured real
