@@ -6,6 +6,7 @@ os.pipe() and pty.openpty() are enough to exercise them properly, without a
 sound card, a keyboard or a terminal.
 """
 
+import contextlib
 import os
 import pty
 import re
@@ -22,7 +23,6 @@ import pytest
 
 from tinycinema.audio.ffplay import FFplaySink
 from tinycinema.keys import KeyReader
-from tinycinema.term import Terminal
 
 FAKE_FFPLAY = Path(__file__).parent / "fixtures" / "fake_ffplay.py"
 
@@ -192,10 +192,8 @@ def key_pipe():
     reader._usable = True
     yield reader, write_fd
     for fd in (read_fd, write_fd):
-        try:
+        with contextlib.suppress(OSError):
             os.close(fd)
-        except OSError:
-            pass
 
 
 def test_nothing_pending_returns_nothing(key_pipe):

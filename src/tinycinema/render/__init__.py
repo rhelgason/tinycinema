@@ -1,8 +1,8 @@
 """Pixels in, terminal cells out."""
 
 from .base import (
-    RenderOptions,
     Renderer,
+    RenderOptions,
     available_modes,
     create,
 )

@@ -11,7 +11,6 @@ from tinycinema.sources.base import fit_box
 from tinycinema.sources.demo import PATTERNS, DemoSource
 from tinycinema.sources.ffmpeg import FFmpegSource, _parse_rate
 
-
 # -- aspect fitting ---------------------------------------------------------
 
 
@@ -64,7 +63,7 @@ def test_demo_produces_correctly_shaped_frames(pattern):
     src = DemoSource(pattern, fps=30, duration=0.2)
     frames = list(src.open(40, 20))
     assert len(frames) == 6
-    for pts, rgb in frames:
+    for _pts, rgb in frames:
         assert rgb.shape == (20, 40, 3)
         assert rgb.dtype == np.uint8
     assert frames[0][0] == 0.0

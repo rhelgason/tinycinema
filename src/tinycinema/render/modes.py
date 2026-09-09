@@ -44,10 +44,8 @@ class AsciiRenderer(Renderer):
         lum = _tone(rgb, self.opts)
         chars = map_to_ramp(lum, ramp_table(self.opts.ramp))
 
-        if self._color and self.opts.color:
-            fg = rgb.astype(np.int16)
-        else:
-            fg = _default_plane(rows, cols)
+        colored = self._color and self.opts.color
+        fg = rgb.astype(np.int16) if colored else _default_plane(rows, cols)
         return CellGrid(chars=chars, fg=fg, bg=_default_plane(rows, cols))
 
 

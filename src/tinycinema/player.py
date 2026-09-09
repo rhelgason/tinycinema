@@ -95,7 +95,7 @@ class Stats:
     def fps(self) -> float:
         return self.rendered / self.elapsed if self.elapsed > 0 else 0.0
 
-    def merge(self, other: "Stats") -> None:
+    def merge(self, other: Stats) -> None:
         self.rendered += other.rendered
         self.dropped += other.dropped
         self.reopens += other.reopens

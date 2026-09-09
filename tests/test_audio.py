@@ -411,7 +411,10 @@ def test_null_sink_reports_nothing():
     s.start(1.0)
     assert s.anchor() is None
     assert not s.active
-    s.pause(); s.resume(); s.stop()  # must not raise
+    # Must not raise.
+    s.pause()
+    s.resume()
+    s.stop()
 
 
 # -- ffplay status parsing --------------------------------------------------

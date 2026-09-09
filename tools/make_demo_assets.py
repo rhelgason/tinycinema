@@ -36,7 +36,6 @@ from tinycinema.render import RenderOptions, create  # noqa: E402
 from tinycinema.sources.demo import DemoSource  # noqa: E402
 from tinycinema.term import CellGrid  # noqa: E402
 
-
 # ---------------------------------------------------------------------------
 # PNG
 # ---------------------------------------------------------------------------

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import os
 import select
 import sys
@@ -171,9 +172,8 @@ class KeyReader:
                     continue
                 i += length
                 continue
-            try:
+            # Multibyte input isn't a control key; ignore it.
+            with contextlib.suppress(UnicodeDecodeError):
                 keys.append(byte.decode("utf-8"))
-            except UnicodeDecodeError:
-                pass  # multibyte input isn't a control key; ignore
             i += 1
         return keys

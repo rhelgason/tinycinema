@@ -4,7 +4,6 @@ import pytest
 
 from tinycinema.cli import build_parser, main, parse_time
 
-
 # -- timestamps -------------------------------------------------------------
 
 

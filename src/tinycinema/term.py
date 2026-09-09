@@ -638,10 +638,9 @@ class Terminal:
             sig = getattr(signal, name, None)
             if sig is None:
                 continue
-            try:
+            # Not the main thread, or a platform that disallows it.
+            with contextlib.suppress(ValueError, OSError):
                 self._prev_fatal[sig] = signal.signal(sig, self._on_fatal)
-            except (ValueError, OSError):
-                pass  # not the main thread, or the platform disallows it
 
         atexit.register(self.restore)
         return self
@@ -661,17 +660,13 @@ class Terminal:
         self._entered = False
 
         if self._prev_winch is not None and hasattr(signal, "SIGWINCH"):
-            try:
+            with contextlib.suppress(ValueError, OSError):
                 signal.signal(signal.SIGWINCH, self._prev_winch)
-            except (ValueError, OSError):
-                pass
             self._prev_winch = None
 
         for sig, previous in self._prev_fatal.items():
-            try:
+            with contextlib.suppress(ValueError, OSError, TypeError):
                 signal.signal(sig, previous)
-            except (ValueError, OSError, TypeError):
-                pass
         self._prev_fatal.clear()
 
         if self.caps.is_tty:
@@ -681,23 +676,18 @@ class Terminal:
                 parts.append(CURSOR_SHOW)
             if self._alt_screen:
                 parts.append(ALT_SCREEN_OFF)
-            try:
+            with contextlib.suppress(ValueError, OSError):
                 sys.stdout.write("".join(parts))
                 sys.stdout.flush()
-            except (ValueError, OSError):
-                pass
 
         if self._saved_termios is not None:
-            try:
+            with contextlib.suppress(termios.error, ValueError, OSError, AttributeError):
                 termios.tcsetattr(sys.stdin.fileno(), termios.TCSADRAIN, self._saved_termios)
-            except (termios.error, ValueError, OSError, AttributeError):
-                pass
             self._saved_termios = None
 
-        try:
+        # Never let teardown raise.
+        with contextlib.suppress(Exception):  # noqa: BLE001
             atexit.unregister(self.restore)
-        except Exception:  # noqa: BLE001 - never let teardown raise
-            pass
 
 
 _ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")

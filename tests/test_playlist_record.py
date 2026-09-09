@@ -7,7 +7,6 @@ import pytest
 from tinycinema.playlist import expand, is_url
 from tinycinema.record import CastRecorder, FrameDumper
 
-
 # -- playlist expansion ------------------------------------------------------
 
 

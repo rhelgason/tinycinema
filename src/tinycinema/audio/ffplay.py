@@ -24,6 +24,7 @@ which would block until the process exited.
 
 from __future__ import annotations
 
+import contextlib
 import os
 import re
 import signal
@@ -202,10 +203,8 @@ class FFplaySink:
         # Remember where we stopped; resume() stamps the time so anchor() can
         # tell whether the process kept its clock while it was stopped.
         self._paused_position = self._report[0] if self._report else self._offset
-        try:
+        with contextlib.suppress(OSError, AttributeError, ValueError):
             self._proc.send_signal(signal.SIGSTOP)  # type: ignore[union-attr]
-        except (OSError, AttributeError, ValueError):
-            pass
 
     def resume(self) -> None:
         if not self._paused:
@@ -216,10 +215,8 @@ class FFplaySink:
             self._resume_check = None
             return
         self._resume_check = (self._paused_position, time.perf_counter())
-        try:
+        with contextlib.suppress(OSError, AttributeError, ValueError):
             self._proc.send_signal(signal.SIGCONT)  # type: ignore[union-attr]
-        except (OSError, AttributeError, ValueError):
-            pass
 
     def set_volume(self, volume: int) -> None:
         """ffplay takes its volume at launch and offers no way to change it.
@@ -245,22 +242,16 @@ class FFplaySink:
             return
         if proc.poll() is None:
             # A stopped process ignores SIGTERM, so wake it first or we hang.
-            try:
+            with contextlib.suppress(OSError, ValueError):
                 proc.send_signal(signal.SIGCONT)
-            except (OSError, ValueError):
-                pass
             proc.terminate()
             try:
                 proc.wait(timeout=1.0)
             except subprocess.TimeoutExpired:
                 proc.kill()
-                try:
+                with contextlib.suppress(subprocess.TimeoutExpired):
                     proc.wait(timeout=1.0)
-                except subprocess.TimeoutExpired:
-                    pass
-        try:
+        with contextlib.suppress(OSError, ValueError):
             if proc.stderr is not None:
                 proc.stderr.close()
-        except (OSError, ValueError):
-            pass
         self._reader = None

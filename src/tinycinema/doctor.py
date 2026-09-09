@@ -11,7 +11,6 @@ import shutil
 import sys
 
 from . import __version__
-from .render import available_modes
 from .binaries import ffmpeg_path, ffplay_path, ffprobe_path
 from .term import detect_capabilities
 

@@ -13,6 +13,7 @@ Two subprocess hazards worth naming, because both are silent hangs:
 
 from __future__ import annotations
 
+import contextlib
 import json
 import re
 import subprocess
@@ -23,13 +24,13 @@ from pathlib import Path
 
 import numpy as np
 
-from ..log import note
 from ..binaries import (
     FFmpegMissingError,
     ffmpeg_path,
     ffprobe_path,
     require_ffmpeg,
 )
+from ..log import note
 from .base import Frame, FrameSource, MediaInfo, fit_box
 
 
@@ -312,10 +313,8 @@ class FFmpegSource(FrameSource):
         # duration and so can't clamp the seek target.
         # (Deliberately outside a finally: an early generator close is not an error.)
         if n == 0 and start <= 0:
-            try:
+            with contextlib.suppress(subprocess.TimeoutExpired):
                 proc.wait(timeout=2.0)
-            except subprocess.TimeoutExpired:
-                pass
             if self._stderr_thread is not None:
                 self._stderr_thread.join(timeout=0.5)  # let the message land first
             rc = proc.returncode
@@ -342,10 +341,8 @@ class FFmpegSource(FrameSource):
                 proc.wait(timeout=1.0)
             except subprocess.TimeoutExpired:
                 proc.kill()
-                try:
+                with contextlib.suppress(subprocess.TimeoutExpired):
                     proc.wait(timeout=1.0)
-                except subprocess.TimeoutExpired:
-                    pass
         self._stderr_thread = None
 
 

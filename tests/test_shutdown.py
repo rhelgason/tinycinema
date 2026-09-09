@@ -17,7 +17,6 @@ import pytest
 from tinycinema.sources.ffmpeg import FFmpegSource, _read_exactly
 from tinycinema.term import FATAL_SIGNALS, Terminal, Terminated
 
-
 # -- fatal signals -----------------------------------------------------------
 
 

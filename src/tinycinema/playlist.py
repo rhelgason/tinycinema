@@ -10,11 +10,12 @@ from pathlib import Path
 #: Containers ffmpeg will happily open. Used only to decide what to pick up when
 #: someone points us at a directory -- an explicit filename is never filtered.
 MEDIA_SUFFIXES = frozenset(
-    """
-    .mp4 .m4v .mkv .webm .mov .avi .flv .wmv .mpg .mpeg .ts .m2ts .ogv .3gp
-    .gif .apng
-    .mp3 .m4a .wav .flac .ogg .opus .aac .wma
-    """.split()
+    # video
+    [".mp4", ".m4v", ".mkv", ".webm", ".mov", ".avi", ".flv", ".wmv"]
+    + [".mpg", ".mpeg", ".ts", ".m2ts", ".ogv", ".3gp", ".gif", ".apng"]
+    # audio: picked up so a directory of them becomes a playlist, then each is
+    # refused individually with a message rather than silently skipped here.
+    + [".mp3", ".m4a", ".wav", ".flac", ".ogg", ".opus", ".aac", ".wma"]
 )
 
 _URL_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.-]*://")
