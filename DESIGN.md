@@ -883,12 +883,36 @@ final byte, string sequences to ST or BEL) is the fix.
 startup wrote the sixel query twice and waited out two 250ms timeouts on a
 terminal that never answers: **0.5s of a 1.12s startup**, spent asking twice.
 
+### The "expensive first frame" that wasn't
+
+An earlier draft of this section claimed the first frame of a pipeline cost
+~150ms more than a steady-state one -- full repaint, cold SGR caches -- and
+listed the handful of frames lost behind it as still open. Measuring each stage
+of the first thirty frames says otherwise:
+
+```
+  n   decode   render   encode    write    total    bytes
+  0    45.36     0.10     2.21     0.79    48.46    24874
+  1     0.05     0.05     0.98     0.36     1.44    12226
+  2     0.02     0.02     0.93     0.18     1.15    12452
+        ... steady state, frames 10+: mean 1.16ms, max 1.31ms
+```
+
+Frame 0 is twice the bytes, as expected for a full repaint -- and costs 2.21ms
+to encode, not 150. Its 45ms is *decode*: waiting for ffmpeg's first frame,
+which `resync()` already discounts. There was no second bug behind the first
+one; the drops in that earlier measurement were a machine with ten saturated
+cores, which is also what reproduces them now (0% idle, 2.5-5.8% under full
+load). Ten consecutive runs of a 119-frame clip on an idle machine drop
+nothing, at every size from 80x24 to a full-screen 200x50 at 43 KB/frame.
+
+Recorded because the mistake is instructive: "it must be the full repaint" was
+a plausible story that survived one glance at the numbers (`p95 encode 12.5ms`)
+and died on the second. Attribute a cost by measuring the stage, not by
+picking the stage that sounds expensive.
+
 ### Still open
 
-- The first frame of a pipeline still costs ~150ms more than a steady-state
-  one -- full repaint, cold SGR caches, first write to the terminal -- so a
-  handful of frames after it can still miss. It is a visible-once hiccup at
-  startup rather than a systematic loss, which is why it is here and not fixed.
 - `tests/test_io.py` spawns a fresh interpreter per test, and importing numpy
   dominates. The backstop timeout is now generous enough that a loaded machine
   does not fail the batch, but the tests are still the slow ones.

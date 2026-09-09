@@ -116,7 +116,7 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--record", metavar="OUT.cast",
                    help="record playback to an asciinema v2 file")
     g.add_argument("--frames", dest="frames_dir", metavar="DIR",
-                   help="write each rendered frame to DIR as plain text")
+                   help="write each rendered frame to DIR (.txt, or .png for an image mode)")
 
     g = p.add_argument_group("misc")
     g.add_argument("-v", "--verbose", action="store_true",

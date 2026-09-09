@@ -143,8 +143,117 @@ all? [DESIGN.md §16](DESIGN.md) answers that in full — short version: ffmpeg
 does demux and decode, and touches none of the pixel-to-glyph mapping, terminal
 writing or A/V sync.
 
-Run `tinycinema --doctor` to check your setup, see which render modes your
-terminal supports, and eyeball a glyph and colour test.
+## First run on a new machine
+
+Six steps, cheapest first. Each proves something the one before it didn't, so
+whichever fails first is the layer to look at — nothing after it will work.
+
+**1 — What's installed?**
+
+```bash
+tinycinema --doctor
+```
+
+Exits non-zero if something *required* is missing. `ffprobe` and `ffplay` are
+warnings rather than failures: without ffprobe the duration is parsed out of
+`ffmpeg -i` instead, and without ffplay playback is simply silent.
+
+The bottom of the output is a glyph and colour test. All four glyph rows should
+look distinct; if the braille row is empty boxes your font lacks those glyphs,
+so stick to `--mode halfblock`. The colour strip should be a smooth gradient,
+not banded.
+
+**2 — Render with no media at all.**
+
+```bash
+tinycinema --demo
+```
+
+Needs neither ffmpeg nor a file — the frames are generated in numpy. A bouncing
+ball, with a status bar along the bottom. Press <kbd>r</kbd> a few times to
+cycle render modes, then <kbd>q</kbd>. If this works and step 4 doesn't, your
+problem is ffmpeg, not the renderer.
+
+**3 — Walk the whole real-hardware path.**
+
+```bash
+git clone https://github.com/rhelgason/tinycinema.git   # if you installed as a tool
+cd tinycinema
+python tools/verify.py
+```
+
+This is the one command worth running on new hardware, and it lives in the
+repo rather than in the installed package — clone it even if you installed with
+`uv tool install`. It walks six layers in order, cheapest first: dependencies,
+rendering with no media, a real ffmpeg decode of a clip it builds itself, all
+eight render modes, four seconds of timed playback under a real pty, and a
+yt-dlp fetch if you pass it a URL. Each line names its layer, so a failure says
+*what* broke rather than just that something did:
+
+```
+5. Timed playback (real terminal)
+---------------------------------
+  [PASS] played to completion  rendered 119 frames in 4.0s (30.0 fps), dropped 0
+         (0.0%), 0 pipeline restarts, 1.54 MB written (12.6 KB/frame)
+  [PASS] the timing loop actually ran  119 frames
+  [PASS] kept up with the clock
+```
+
+`dropped 0 (0.0%)` is what a healthy machine looks like. Anything under a few
+percent is fine; a large number means the terminal can't keep up — see the
+table below.
+
+**4 — A real file, with sound.**
+
+```bash
+tinycinema clip.mp4
+```
+
+Look at the right-hand end of the status bar. It ends with the render mode and
+the **clock source**, which is the single most useful thing on screen:
+
+| It says | Meaning |
+|---|---|
+| `audio` | ffplay is playing and the video is syncing to it — the good case |
+| `wall` | no audio track, `--no-audio`, or no ffplay; video runs on elapsed time |
+| `wall*` | audio *was* expected but the sink never reported, so it gave up on it |
+
+`wall*` on a file that definitely has sound is the one result worth reporting —
+rerun it with `--verbose` to see the exact ffplay command and its output.
+
+**5 — Prove the interactive parts.**
+
+<kbd>space</kbd> to pause, <kbd>.</kbd> to step a frame, <kbd>space</kbd> again.
+Then <kbd>l</kbd> to seek forward, <kbd>r</kbd> to change mode, <kbd>-</kbd> and
+<kbd>=</kbd> for volume, and **resize the window while it plays** — the picture
+should rebuild at the new size without the audio stuttering. <kbd>q</kbd> quits;
+the terminal should come back exactly as you left it, cursor and all.
+
+**6 — YouTube.**
+
+```bash
+tinycinema "https://www.youtube.com/watch?v=FtutLA63Cp8" --quality 360 --verbose
+python tools/verify.py "https://www.youtube.com/watch?v=FtutLA63Cp8"
+```
+
+Needs the `youtube` extra. The first run downloads and caches; `--verbose`
+prints the resolved format and the cache path. `--clear-cache` cleans up after.
+
+### When something is wrong
+
+| Symptom | Likely cause | What to do |
+|---|---|---|
+| `ffmpeg not found on PATH` | not installed, or installed somewhere odd | `brew install ffmpeg`, or point `TINYCINEMA_FFMPEG` at the binary |
+| Plays, but silent | no ffplay, or the file has no audio track | check the ffplay line in `--doctor`; `--verbose` prints the ffplay command |
+| Status bar says `wall*` | ffplay launched but never reported a position | rerun with `--verbose`; playback still works, just unsynced |
+| Choppy, or `--stats` shows heavy drops | terminal can't absorb the bytes | `--fps 15`, a smaller window, or `--mode ascii` (~1 KB/frame against ~43 for halfblock at 200×50) |
+| Especially bad over SSH | same, plus the network | `--mode ascii` or `--mode blocks`; `--doctor` warns when it detects SSH |
+| Everything is monochrome | `NO_COLOR` is set, or the terminal isn't truecolor | check the colour line in `--doctor`; <kbd>c</kbd> toggles colour at runtime |
+| Braille mode shows empty boxes | the font has no braille glyphs | use `--mode halfblock`, or install a font that has them |
+| An image mode sprays garbage | that terminal doesn't really support it | `--doctor` lists the ones it detected; image modes are never chosen by `auto` |
+| Picture is squashed or stretched | should not happen — the aspect fit is per-mode | worth an issue, with the mode and your terminal |
+| Piping produces one frame | working as intended | a pipe implies `--once` and plain text. To capture every frame, run it in a real terminal with `--frames DIR` (which is where the loop actually runs) or `--record out.cast` |
+| Terminal left broken after a crash | should not happen — restore is in `atexit` *and* a signal handler | `reset`, then an issue please |
 
 ## Usage
 
@@ -210,6 +319,32 @@ Built-in test patterns: `ball`, `plasma`, `bars`, `mandelbrot`.
 | <kbd>h</kbd> | toggle HUD |
 | <kbd>q</kbd> / <kbd>esc</kbd> | quit |
 
+Keys are read in cbreak mode, so <kbd>ctrl-c</kbd> still works, and a burst is
+never collapsed — holding <kbd>r</kbd> cycles through as many modes as you
+pressed.
+
+### The status bar
+
+```
+|> big-buck-bunny ━━━━━━━━━━━━━━━━━──────────────  01:12 / 09:56  30fps  halfblock  audio
+│  │              │                                │              │      │          │
+│  │              │                                │              │      │          └ clock source
+│  │              │                                │              │      └ render mode
+│  │              │                                │              └ measured fps, and drops if any
+│  │              │                                └ position
+│  │              └ progress
+│  └ title
+└ playing / paused
+```
+
+The last field is the one to watch when something looks off: `audio` means the
+video is syncing to the audio device, `wall` means it's running on elapsed time
+(no audio track, `--no-audio`, or no ffplay), and `wall*` means audio was
+expected but the sink never reported a position, so it gave up and fell back.
+
+<kbd>h</kbd> hides the bar; `--no-hud` starts without it, which is what you
+want for `--record`.
+
 ### Options
 
 ```
@@ -242,7 +377,7 @@ image modes   kitty | iterm | sixel          (opt-in; see --doctor)
 --no-hud          hide the status bar
 --stats           print a timing summary on exit
 --record OUT.cast write an asciinema recording
---frames DIR      dump each rendered frame as text
+--frames DIR      dump each rendered frame (.txt, or .png for an image mode)
 --doctor          diagnose ffmpeg, audio and terminal capabilities
 --clear-cache     delete downloaded videos
 -v, --verbose     explain what is being resolved, fetched and run
@@ -343,19 +478,17 @@ is written and dormant — it only fires on a `v*` tag — if that ever changes.
 python tools/verify.py              # first-run check on real hardware
 python tools/verify.py "https://youtu.be/..."   # ...including a real fetch
 
-pytest                              # 458 tests, no video, ffmpeg, audio or network
+pytest                              # 474 tests, no video, ffmpeg, audio or network
 python tools/make_demo_assets.py    # regenerate the README images
 tinycinema --demo --stats           # quick smoke test
 ```
 
 `tools/verify.py` exists because of what the test suite deliberately *doesn't*
-touch. It walks the real-hardware path in order — dependencies, rendering, a
-real ffmpeg decode, every render mode, timed playback under a real pty, then a
-yt-dlp fetch — so a failure tells you which layer broke rather than just that
-something did.
+touch — see [First run on a new machine](#first-run-on-a-new-machine) for what
+it checks and how to read its output.
 
 The test suite itself needs no media, ffmpeg, sound card or network connection —
-85% coverage, and the parts that genuinely need something on the other end get a
+87% coverage, and the parts that genuinely need something on the other end get a
 committed fake ffplay, `os.pipe()` and `pty.openpty()` rather than being skipped: the writer is verified with golden byte strings, the renderers with
 exact cell grids, the image protocols by decoding their payloads back to pixels,
 both clocks by hand-cranking them, and `ffmpeg -i` parsing against captured real
