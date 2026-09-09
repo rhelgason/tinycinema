@@ -10,6 +10,12 @@ Play videos — local files or YouTube links — directly in your terminal, with
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![Status: alpha](https://img.shields.io/badge/status-alpha-orange.svg)](#roadmap)
 
+<img src="docs/demo-zoom.gif" width="720" alt="A Mandelbrot zoom playing in a terminal, rendered in half blocks">
+
+<sub>The built in `mandelbrot` pattern in `halfblock` mode — real renderer
+output, no media file. Swap in a recording of an actual video: see
+<a href="#capturing-the-demo-assets">Capturing the demo assets</a>.</sub>
+
 </div>
 
 ---
@@ -24,10 +30,10 @@ Play videos — local files or YouTube links — directly in your terminal, with
 
 ## Demo
 
-Everything below is real renderer output, produced by
+The four below are real renderer output, produced by
 [`tools/make_demo_assets.py`](tools/make_demo_assets.py) from the built-in
-`mandelbrot` test pattern — no media files, no ffmpeg, no screenshots.
-Regenerate at any time with `python tools/make_demo_assets.py`.
+`mandelbrot` test pattern — no media files and no ffmpeg required. Regenerate
+at any time with `python tools/make_demo_assets.py`.
 
 <div align="center">
 
@@ -99,6 +105,15 @@ Two independently coloured pixels per character cell, via `▀`.
 ⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠈⠀⠊⠢⡊⡪⣺⣿⣿⣀⠀⠀⠀⣐⣹⣿⡚⠂⠊⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
 ```
 
+#### `--mode kitty` — real pixels, on a terminal that supports them
+
+The inline image protocols hand the terminal an actual bitmap, so alone among
+the modes they cannot be shown here as text. A screenshot is pending a terminal
+that supports one.
+<!-- replace the paragraph above with this once the file exists
+<img src="docs/demo-kitty.png" width="640" alt="A video frame drawn with the kitty graphics protocol">
+-->
+
 ## Install
 
 ```bash
@@ -162,6 +177,10 @@ The bottom of the output is a glyph and colour test. All four glyph rows should
 look distinct; if the braille row is empty boxes your font lacks those glyphs,
 so stick to `--mode halfblock`. The colour strip should be a smooth gradient,
 not banded.
+
+<!-- doctor.png goes here. See "Capturing the demo assets" under Development.
+<img src="docs/doctor.png" width="640" alt="Output of the tinycinema doctor command">
+-->
 
 **2 — Render with no media at all.**
 
@@ -486,6 +505,39 @@ tinycinema --demo --stats           # quick smoke test
 `tools/verify.py` exists because of what the test suite deliberately *doesn't*
 touch — see [First run on a new machine](#first-run-on-a-new-machine) for what
 it checks and how to read its output.
+
+### Capturing the demo assets
+
+The banner at the top is generated — `python tools/make_motion_gif.py`, which
+is the one asset script that needs ffmpeg, which is why it is separate from
+`make_demo_assets.py`. Two slots still want a machine with real media and a real
+terminal, and each is marked with an HTML comment where it goes: drop the file
+in, swap the comment markers around, done.
+
+| File | How to make it |
+|---|---|
+| `docs/demo-kitty.png` | screenshot of `tinycinema clip.mp4 --mode kitty --fps 15` |
+| `docs/doctor.png` | screenshot of `tinycinema --doctor` |
+| `docs/demo-zoom.gif` | *(optional upgrade)* replace the generated banner with real video: `tinycinema clip.mp4 --record /tmp/hero.cast --no-hud`, then `agg --cols 96 --rows 28 /tmp/hero.cast docs/demo-zoom.gif` |
+
+[agg](https://github.com/asciinema/agg) is asciinema's cast-to-GIF converter.
+Two things worth knowing before spending time on it:
+
+- **Keep the hero short and small.** Ten seconds at 100×28 is plenty. A terminal
+  GIF is mostly full-frame colour change, so it grows fast — and `--no-hud`
+  roughly halves the cast by dropping the per-frame fps counter, which changes
+  every single frame and so defeats the writer's diffing.
+- **The image modes cannot be recorded this way.** agg implements a text
+  terminal, so kitty, iTerm2 and sixel payloads replay as nothing at all. Those
+  need a real screenshot, which is also the honest way to show them.
+
+`make_demo_assets.py` only rewrites the four stills it owns, so the banner and
+anything you add alongside it are left alone and the `assets` CI job stays
+green.
+
+A video with sound is the one thing a GIF cannot show. If you want that, GitHub
+renders an `.mp4` attached to an issue or PR as an inline player — link it here
+rather than committing it, so the repo stays small.
 
 The test suite itself needs no media, ffmpeg, sound card or network connection —
 88% coverage, and the parts that genuinely need something on the other end get a
