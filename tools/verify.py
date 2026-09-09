@@ -26,6 +26,16 @@ from pathlib import Path
 GREEN, RED, YELLOW, DIM, RESET = "\x1b[32m", "\x1b[31m", "\x1b[33m", "\x1b[2m", "\x1b[0m"
 results: list[tuple[str, bool, str]] = []
 
+#: Forced into every child, so what the checks see does not depend on the
+#: terminal that happens to be running them.
+#:
+#: Colour specifically. Without it `blocks` has no colour to work with, falls
+#: back to shaded block glyphs, and comes out byte-identical to `ascii` -- whose
+#: default ramp is those same glyphs. Both correct, and indistinguishable. So
+#: "modes produce distinct output" passed in a truecolor shell and failed on a
+#: bare CI runner, which is the worst way for a check to behave.
+CHILD_ENV = {**os.environ, "COLORTERM": "truecolor"}
+
 
 def check(name: str, ok: bool, detail: str = "", fail_hint: str = "", fatal: bool = False):
     """`detail` prints either way; `fail_hint` only when it fails."""
@@ -51,7 +61,9 @@ def skip(name: str, why: str) -> None:
 
 
 def run(cmd: list[str], timeout: int = 60) -> subprocess.CompletedProcess:
-    return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, check=False)
+    return subprocess.run(
+        cmd, capture_output=True, text=True, timeout=timeout, check=False, env=CHILD_ENV
+    )
 
 
 def run_pty(cmd: list[str], cols: int = 80, rows: int = 24, timeout: int = 120):
@@ -72,7 +84,7 @@ def run_pty(cmd: list[str], cols: int = 80, rows: int = 24, timeout: int = 120):
     master, slave = pty.openpty()
     fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
     proc = subprocess.Popen(
-        cmd, stdin=slave, stdout=slave, stderr=subprocess.PIPE, close_fds=True
+        cmd, stdin=slave, stdout=slave, stderr=subprocess.PIPE, close_fds=True, env=CHILD_ENV
     )
     os.close(slave)
     os.set_blocking(master, False)
@@ -204,9 +216,13 @@ def main() -> int:
                   fail_hint=out.stderr.strip()[:100])
 
         # Distinct output proves --mode is actually taking effect, which a
-        # per-mode "it didn't crash" check does not. ascii and ascii-color are
-        # excluded from each other: piped output carries no colour, and colour
-        # is the only thing that separates them, so identical here is correct.
+        # per-mode "it didn't crash" check does not. It only means anything with
+        # colour available -- see CHILD_ENV -- because several modes degrade to
+        # the same ramp glyphs without it.
+        #
+        # ascii and ascii-color are still excluded from each other: piped output
+        # carries no colour, and colour is the only thing that separates them,
+        # so identical here is correct rather than a failure.
         distinct = {m: v for m, v in rendered.items() if m != "ascii-color"}
         check("modes produce distinct output",
               len(set(distinct.values())) == len(distinct),

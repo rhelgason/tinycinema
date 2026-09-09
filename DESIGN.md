@@ -911,6 +911,24 @@ a plausible story that survived one glance at the numbers (`p95 encode 12.5ms`)
 and died on the second. Attribute a cost by measuring the stage, not by
 picking the stage that sounds expensive.
 
+### A check that only passed on the machine that wrote it
+
+`verify.py` asserts the render modes produce distinct output, which is what
+proves `--mode` is honoured at all. It passed everywhere it was developed and
+failed on CI, on `blocks` and `ascii` being byte-identical.
+
+Both were right. `blocks` with no colour to work with falls back to shaded block
+glyphs; `ascii`'s default ramp *is* those glyphs. They coincide exactly, and
+only when colour is unavailable -- which is the difference between a developer's
+truecolor shell and a bare runner with no `COLORTERM`. `--ramp standard` would
+have separated them again.
+
+So the check was reading the ambient terminal, not the code. Children are now
+launched with `COLORTERM=truecolor` forced, and the output is byte-identical
+with and without it in the parent. The general form: a black-box check on a CLI
+inherits the environment, and terminal capability detection is *designed* to
+vary with it. Pin what you are testing.
+
 ### Still open
 
 - `tests/test_io.py` spawns a fresh interpreter per test, and importing numpy
