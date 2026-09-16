@@ -86,36 +86,33 @@ def test_a_seek_offsets_the_reported_position(sink):
     assert s.anchor()[0] >= 60.0, "the seek offset must be added back on"
 
 
-def test_pause_freezes_the_position_and_resume_continues(sink):
+def test_pause_stops_audio_and_resume_restarts_at_the_same_place(sink):
+    """SIGSTOP left CoreAudio looping the last buffer; pause must kill ffplay."""
     s = sink("--duration", "10")
     s.start(0.0)
     assert wait_for(lambda: s.anchor() is not None)
 
+    frozen = s._report[0]
+    pid = s._proc.pid
     s.pause()
     assert s.anchor() is None, "a paused sink reports nothing"
-    frozen = s._report[0]
-    time.sleep(0.8)
-    assert s._report[0] == frozen, "the stopped process must not advance"
+    assert not s.active
+    assert wait_for(lambda: not _alive(pid)), "ffplay must actually exit on pause"
 
     s.resume()
     assert wait_for(lambda: s.anchor() is not None)
-    assert s.anchor()[0] >= frozen
+    assert s.anchor()[0] == pytest.approx(frozen, abs=1.5)
 
 
-def test_a_sink_that_absorbs_the_pause_is_restarted(sink):
-    """The behaviour we can't predict for a real ffplay build, end to end."""
-    s = sink("--duration", "20", "--absorb-pause")
+def test_pause_then_resume_is_a_new_process(sink):
+    s = sink("--duration", "20")
     s.start(0.0)
-    assert wait_for(lambda: s.anchor() is not None)
-
+    assert wait_for(lambda: s.active)
+    first = s._proc.pid
     s.pause()
-    paused_at = s._report[0]
-    time.sleep(1.5)
     s.resume()
-
-    # Give it a moment to notice the jump and relaunch.
-    assert wait_for(lambda: s.anchor() is not None, timeout=6)
-    assert s.anchor()[0] < paused_at + 1.2, "the pause was silently skipped"
+    assert wait_for(lambda: s.active)
+    assert s._proc.pid != first
 
 
 def test_a_silent_sink_never_produces_an_anchor(sink):
@@ -143,8 +140,7 @@ def test_stop_terminates_a_running_sink(sink):
 
 
 def test_stop_terminates_a_paused_sink(sink):
-    """A stopped process ignores SIGTERM, so stop() has to wake it first --
-    otherwise quitting while paused hangs for the kill timeout."""
+    """Pause already kills ffplay; stop() must still return immediately."""
     s = sink("--duration", "60")
     s.start(0.0)
     assert wait_for(lambda: s.active)
@@ -152,7 +148,7 @@ def test_stop_terminates_a_paused_sink(sink):
     s.pause()
     started = time.perf_counter()
     s.stop()
-    assert time.perf_counter() - started < 3, "stop() blocked on a stopped child"
+    assert time.perf_counter() - started < 3, "stop() blocked after pause"
     assert wait_for(lambda: not _alive(pid))
 
 

@@ -458,6 +458,35 @@ def test_a_restart_while_paused_stays_paused(clock):
     assert clock.paused, "the clock must be re-paused after the restart"
 
 
+def test_paused_pipeline_paints_so_a_mode_switch_is_visible(clock):
+    """A reopen while paused used to wait without painting, so `r` only
+    took effect after unpausing."""
+    src = FakeSource(n=20)
+    p = make_player(clock, src)
+    p._paused = True
+    painted = []
+    real = p._paint
+
+    def spy(rgb, pts, *rest):
+        painted.append(pts)
+        return real(rgb, pts, *rest)
+
+    p._paint = spy
+    p._wait_while_paused = lambda: "quit"
+    p._play_once()
+    assert painted == [0.0]
+    assert p._paused
+
+
+def test_cycling_mode_while_paused_reopens_without_unpausing(clock):
+    p = make_player(clock, FakeSource(n=5))
+    p._paused = True
+    before = p.renderer.name
+    assert p._cycle_mode(+1) == "reopen"
+    assert p.renderer.name != before
+    assert p._paused
+
+
 def test_playlist_keys_only_work_with_a_playlist(clock):
     alone = make_player(clock, FakeSource(n=5), playlist=False)
     assert alone._apply_key("n") is None

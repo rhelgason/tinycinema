@@ -151,6 +151,59 @@ def test_diffing_actually_saves_bytes_on_realistic_motion():
     assert partial < full / 20
 
 
+def test_draw_emits_one_binary_burst_when_the_stream_has_a_buffer():
+    """The 8 KiB text-wrapper flush is what splits a bouncing ball in half."""
+
+    class Fake:
+        encoding = "utf-8"
+        errors = "strict"
+
+        def __init__(self):
+            self.writes = []
+            self.buffer = self
+
+        def flush(self):
+            pass
+
+        def write(self, data):
+            self.writes.append(data)
+            return len(data)
+
+    fake = Fake()
+    FrameWriter(fake, synchronized=True).draw(grid(2, 2, "x"))
+    assert len(fake.writes) == 1
+    chunk = bytes(fake.writes[0])
+    assert chunk.startswith(b"\x1b[?2026h")
+    assert chunk.endswith(b"\x1b[?2026l")
+
+
+def test_emit_retries_short_writes(monkeypatch):
+    from tinycinema.term import emit
+
+    chunks: list[bytes] = []
+
+    def short_write(fd, data):
+        piece = bytes(data[:3])
+        chunks.append(piece)
+        return len(piece)
+
+    monkeypatch.setattr("tinycinema.term.os.write", short_write)
+
+    class Stream:
+        encoding = "utf-8"
+        errors = "strict"
+
+        def fileno(self):
+            return 7
+
+        def flush(self):
+            pass
+
+    emit(Stream(), "abcdefghij")
+    assert b"".join(chunks) == b"abcdefghij"
+    assert all(len(c) <= 3 for c in chunks)
+
+
 def test_plain_writer_emits_no_escapes():
     import io
 

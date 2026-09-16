@@ -165,6 +165,8 @@ class Player:
         self._volume_dirty_at: float | None = None
         #: Set while single-stepping: render exactly one frame, then re-pause.
         self._step_once = False
+        #: Colour/HUD-text changes while paused: wait() returns so we repaint.
+        self._needs_redraw = False
         #: How the file ended, for the playlist driver.
         self.exit_reason: Restart = "eof"
 
@@ -249,8 +251,21 @@ class Player:
             # then waiting means a single frame-step advances twice: once for the
             # step and once for the repaint that follows it.
             if self._paused:
-                if shown is not None:
-                    self._paint(shown[1], shown[0], cols, rows, video_rows)
+                if shown is None:
+                    # A mode switch reopens the pipeline while paused. Decode
+                    # one frame so the new mode is visible immediately, rather
+                    # than only jumping once playback resumes.
+                    try:
+                        pts, rgb = next(stream)
+                    except StopIteration:
+                        return "eof"
+                    if first_frame:
+                        first_frame = False
+                        self.clock.resync(pts)
+                    shown = (pts, rgb)
+                    self._position = pts
+                self._paint(shown[1], shown[0], cols, rows, video_rows)
+                self._needs_redraw = False
                 action = self._wait_while_paused()
                 if action is not None:
                     return action
@@ -436,6 +451,7 @@ class Player:
             self.opts.render.color = not self.opts.render.color
             self._notify(f"color {'on' if self.opts.render.color else 'off'}")
             self.writer.invalidate()
+            self._needs_redraw = True
             return None
         if key == "r":
             return self._cycle_mode(+1)
@@ -558,6 +574,7 @@ class Player:
     def _notify(self, text: str, seconds: float = 1.5) -> None:
         self._message = text
         self._message_until = time.perf_counter() + seconds
+        self._needs_redraw = True
 
     def _wait_while_paused(self) -> Restart | None:
         """Idle without burning CPU, but stay responsive to keys and resizes."""
@@ -567,6 +584,8 @@ class Player:
                 return action
             if self.term.take_resize():
                 return "resize"
+            if self._needs_redraw:
+                return None
         return None
 
     # -- geometry ----------------------------------------------------------

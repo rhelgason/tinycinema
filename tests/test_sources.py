@@ -87,6 +87,18 @@ def test_demo_animates():
     assert not np.array_equal(frames[0][1], frames[-1][1])
 
 
+def test_demo_ball_only_the_ball_moves():
+    """A shifting background would dirty every cell and tear on Apple Terminal."""
+    frames = list(DemoSource("ball", fps=30, duration=0.2).open(80, 40))
+    a, b = frames[0][1], frames[1][1]
+    changed = np.any(a != b, axis=2)
+    assert 0 < changed.mean() < 0.25
+    # Unique colours in the dirty region, not cells: a smooth shade is one
+    # truecolor span per pixel and the tty write then splits mid-ball.
+    uniq = np.unique(b[changed].reshape(-1, 3), axis=0)
+    assert len(uniq) <= 12
+
+
 def test_demo_ball_stays_round_under_tall_pixels():
     """With 2:1 pixels the ball must be drawn twice as wide to display round."""
     src = DemoSource("ball", fps=1, duration=1.0)

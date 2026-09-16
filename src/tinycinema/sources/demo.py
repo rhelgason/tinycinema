@@ -159,9 +159,16 @@ def _mandelbrot(g: _Grid, t: float) -> np.ndarray:
 
 
 def _ball(g: _Grid, t: float) -> np.ndarray:
-    """A bouncing ball over a slow gradient. The Phase 0 hello-world."""
-    # background: slowly rotating gradient
-    hue = (g.xs * 0.5 + g.ys * 0.3 + t * 0.05) % 1.0
+    """A bouncing ball over a banded gradient. The Phase 0 hello-world.
+
+    Colour count is kept tiny on purpose. A smooth shade or gradient makes
+    every dirty cell a unique truecolor span (~8 KB at 200x50), and a tty
+    write that large splits: Apple Terminal paints the first chunk before the
+    rest arrives, which looks like a bite taken out of the ball.
+    """
+    # Eight solid bands, not a smooth wash -- erasing the ball is then a few
+    # long runs instead of one SGR per background pixel.
+    hue = np.round((g.xs * 0.5 + g.ys * 0.3) * 8.0) / 8.0
     bg = np.stack(
         np.broadcast_arrays(
             0.10 + 0.10 * np.sin(hue * 6.283),
@@ -187,18 +194,15 @@ def _ball(g: _Grid, t: float) -> np.ndarray:
 
     # measure distance in display units, not pixel units
     d = np.sqrt(((g.px - cx) * g.pa) ** 2 + (g.py - cy) ** 2)
-    edge = np.clip((radius - d) / max(radius * 0.35, 1.0), 0.0, 1.0)[..., None]
-
-    ball = np.array(
-        [
-            0.55 + 0.45 * math.sin(t * 1.7),
-            0.55 + 0.45 * math.sin(t * 1.7 + 2.094),
-            0.55 + 0.45 * math.sin(t * 1.7 + 4.188),
-        ],
-        dtype=np.float32,
+    inside = d <= radius
+    # one offset disc for a highlight -- two colours, not a per-pixel shade
+    d_hi = np.sqrt(
+        ((g.px - (cx - rx * 0.28)) * g.pa) ** 2 + (g.py - (cy - ry * 0.28)) ** 2
     )
-    # a little shading so it reads as a sphere rather than a disc
-    shade = np.clip(1.0 - d / (radius * 2.2), 0.35, 1.0)[..., None]
+    highlight = inside & (d_hi <= radius * 0.45)
 
-    out = bg * (1.0 - edge) + ball * shade * edge
+    body = np.array([0.95, 0.45, 0.28], dtype=np.float32)
+    hi = np.array([1.0, 0.75, 0.55], dtype=np.float32)
+    out = np.where(inside[..., None], body, bg)
+    out = np.where(highlight[..., None], hi, out)
     return (np.clip(out, 0.0, 1.0) * 255).astype(np.uint8)

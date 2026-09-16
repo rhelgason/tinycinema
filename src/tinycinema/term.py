@@ -152,6 +152,51 @@ def _bg_seq(key: int) -> str:
     return f"48;2;{(key >> 16) & 0xFF};{(key >> 8) & 0xFF};{key & 0xFF}"
 
 
+def emit(stream, payload: str) -> None:
+    """Write one frame as a single UTF-8 burst.
+
+    ``TextIOWrapper.write`` flushes every 8 KiB. On a terminal that paints as
+    it parses and ignores DEC 2026 (Apple Terminal), that presents the top of
+    the frame before the bottom has arrived.
+    """
+    encoding = getattr(stream, "encoding", None) or "utf-8"
+    errors = getattr(stream, "errors", None) or "replace"
+    data = payload.encode(encoding, errors)
+    # Prefer the fd so a short tty write is retried. stdout.buffer.write of a
+    # payload just over 8 KiB splits at the BufferedWriter boundary, which is
+    # the remaining sliver of tearing on the ball demo.
+    fileno = getattr(stream, "fileno", None)
+    if callable(fileno):
+        try:
+            fd = stream.fileno()
+            stream.flush()
+            view = memoryview(data)
+            while view:
+                n = os.write(fd, view)
+                if n <= 0:  # pragma: no cover - a zero-byte write is a stall
+                    break
+                view = view[n:]
+            return
+        except (AttributeError, OSError, ValueError):
+            pass
+    buf = getattr(stream, "buffer", None)
+    if buf is not None:
+        try:
+            stream.flush()
+            view = memoryview(data)
+            while view:
+                n = buf.write(view)
+                if not n:
+                    break
+                view = view[n:]
+            buf.flush()
+            return
+        except (AttributeError, OSError, ValueError, TypeError):
+            pass
+    stream.write(payload)
+    stream.flush()
+
+
 class FrameWriter:
     """Paints CellGrids to a tty, emitting the minimum plausible byte stream.
 
@@ -187,8 +232,7 @@ class FrameWriter:
         payload = self.encode(grid)
         if not payload:
             return
-        self._stream.write(payload)
-        self._stream.flush()
+        emit(self._stream, payload)
         self.bytes_written += len(payload)
         if self.recorder is not None:
             self.recorder.write(payload)
@@ -332,8 +376,7 @@ class ImageWriter:
         if self._synchronized:
             parts.append(SYNC_END)
         out = "".join(parts)
-        self._stream.write(out)
-        self._stream.flush()
+        emit(self._stream, out)
         self.bytes_written += len(out)
         if self.recorder is not None:
             self.recorder.write(out)
