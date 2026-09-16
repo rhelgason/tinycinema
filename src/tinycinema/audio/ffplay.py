@@ -60,6 +60,7 @@ class FFplaySink:
         #: (media position, perf_counter when observed). Assigned as a whole
         #: tuple so the reader thread and the player never see a torn value.
         self._report: tuple[float, float] | None = None
+        self._state_lock = threading.Lock()
         self._paused = False
         self._offset = 0.0
         self._paused_position = 0.0
@@ -147,8 +148,9 @@ class FFplaySink:
                     reported = float(matches[-1])  # most recent wins
                 except ValueError:
                     continue
-                if self._proc is proc:
-                    self._report = (reported + offset, time.perf_counter())
+                with self._state_lock:
+                    if self._proc is proc and not self._paused:
+                        self._report = (reported + offset, time.perf_counter())
 
     # -- clock -------------------------------------------------------------
 
@@ -199,18 +201,20 @@ class FFplaySink:
         if self._paused or not self.active:
             self._paused = True
             return
-        self._paused = True
-        # Remember where we stopped; resume() stamps the time so anchor() can
-        # tell whether the process kept its clock while it was stopped.
-        self._paused_position = self._report[0] if self._report else self._offset
+        with self._state_lock:
+            self._paused = True
+            # Remember where we stopped; resume() stamps the time so anchor() can
+            # tell whether the process kept its clock while it was stopped.
+            self._paused_position = self._report[0] if self._report else self._offset
         with contextlib.suppress(OSError, AttributeError, ValueError):
             self._proc.send_signal(signal.SIGSTOP)  # type: ignore[union-attr]
 
     def resume(self) -> None:
         if not self._paused:
             return
-        self._paused = False
-        self._report = None  # anything from before the pause is stale
+        with self._state_lock:
+            self._paused = False
+            self._report = None  # anything from before the pause is stale
         if not self.active:
             self._resume_check = None
             return
