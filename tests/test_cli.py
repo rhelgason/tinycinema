@@ -201,6 +201,29 @@ def test_doctor_runs(capsys):
     assert "Glyph check" in out
 
 
+def test_doctor_hue_ramp_is_smooth():
+    """Regression: green used to be 128+60*(i%3), a sawtooth, not a gradient."""
+    from tinycinema.doctor import _hue_ramp
+
+    rgb = _hue_ramp(48)
+    assert rgb[0] == (255, 0, 0)
+    assert rgb[-1] == (255, 0, 0)  # full circle back to red
+    # Adjacent cells must not jump the way the old modulo-3 green did (~60).
+    for i in range(1, len(rgb)):
+        r0, g0, b0 = rgb[i - 1]
+        r1, g1, b1 = rgb[i]
+        step = abs(r1 - r0) + abs(g1 - g0) + abs(b1 - b0)
+        assert step < 50, f"jump of {step} between {(r0, g0, b0)} and {(r1, g1, b1)}"
+
+
+def test_doctor_grey_ramp_is_monotonic():
+    from tinycinema.doctor import _grey_ramp
+
+    grey = [r for r, g, b in _grey_ramp(48)]
+    assert grey[0] == 0 and grey[-1] == 255
+    assert grey == sorted(grey)
+
+
 def test_stats_are_reported(capsys):
     main(["--demo", "--width", "20", "--height", "6", "--stats"])
     assert "rendered" in capsys.readouterr().err

@@ -6,6 +6,7 @@ Almost every failure report for a tool like this is "ffmpeg isn't installed" or
 
 from __future__ import annotations
 
+import colorsys
 import os
 import shutil
 import sys
@@ -143,12 +144,9 @@ def run_doctor() -> int:
     lines.append("")
 
     if caps.truecolor:
-        swatch = "".join(
-            f"\x1b[48;2;{int(255 * i / 31)};{int(128 + 60 * (i % 3))};{255 - int(255 * i / 31)}m "
-            for i in range(32)
-        )
-        lines.append("\x1b[1mColor check\x1b[0m  (should be a smooth gradient)")
-        lines.append("    " + swatch + "\x1b[0m")
+        lines.append("\x1b[1mColor check\x1b[0m  (smooth grey, then a rainbow)")
+        lines.append("    " + _swatch_grey())
+        lines.append("    " + _swatch_hue())
         lines.append("")
 
     if problems:
@@ -158,3 +156,31 @@ def run_doctor() -> int:
 
     print("\n".join(lines))
     return 1 if problems else 0
+
+
+def _swatch_rgb(rgb: list[tuple[int, int, int]]) -> str:
+    return "".join(f"\x1b[48;2;{r};{g};{b}m " for r, g, b in rgb) + "\x1b[0m"
+
+
+def _hue_ramp(n: int = 48) -> list[tuple[int, int, int]]:
+    """A full HSV hue sweep. Used to be R/B ramps with G = 128+60*(i%3),
+    which striped every third cell instead of looking like a gradient."""
+    last = max(n - 1, 1)
+    out = []
+    for i in range(n):
+        r, g, b = colorsys.hsv_to_rgb(i / last, 1.0, 1.0)
+        out.append((int(r * 255 + 0.5), int(g * 255 + 0.5), int(b * 255 + 0.5)))
+    return out
+
+
+def _grey_ramp(n: int = 48) -> list[tuple[int, int, int]]:
+    last = max(n - 1, 1)
+    return [(int(255 * i / last + 0.5),) * 3 for i in range(n)]
+
+
+def _swatch_hue(n: int = 48) -> str:
+    return _swatch_rgb(_hue_ramp(n))
+
+
+def _swatch_grey(n: int = 48) -> str:
+    return _swatch_rgb(_grey_ramp(n))
