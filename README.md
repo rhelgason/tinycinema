@@ -2,9 +2,7 @@
 
 # 🎬 tinycinema
 
-**Your terminal is a movie theater.**
-
-Play videos — local files or YouTube links — directly in your terminal, with sound.
+Play videos directly in your terminal, with sound, either from local or Youtube.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
@@ -51,8 +49,6 @@ python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 pytest
 ```
-
-Design notes, including what was considered and rejected: [DESIGN.md](DESIGN.md).
 
 ## License
 
