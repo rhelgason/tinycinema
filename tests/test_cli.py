@@ -192,6 +192,25 @@ def test_demo_once_renders_plain_text_to_a_pipe(capsys):
     assert all(len(line) == 20 for line in out.rstrip("\n").split("\n"))
 
 
+def _piped_demo(capsys, *flags: str) -> str:
+    assert main(["--demo", "bars", "--width", "20", "--height", "6", *flags]) == 0
+    return capsys.readouterr().out
+
+
+def test_piped_ascii_default_ramp_matches_blocks(capsys):
+    """The coincidence tools/verify.py used to treat as a failure."""
+    ascii_out = _piped_demo(capsys, "--mode", "ascii")
+    blocks_out = _piped_demo(capsys, "--mode", "blocks")
+    assert ascii_out == blocks_out
+
+
+def test_piped_ascii_standard_ramp_differs_from_blocks(capsys):
+    """How the verifier tells the two modes apart without a colour tty."""
+    ascii_out = _piped_demo(capsys, "--mode", "ascii", "--ramp", "standard")
+    blocks_out = _piped_demo(capsys, "--mode", "blocks", "--ramp", "standard")
+    assert ascii_out != blocks_out
+
+
 def test_doctor_runs(capsys):
     code = main(["--doctor"])
     out = capsys.readouterr().out

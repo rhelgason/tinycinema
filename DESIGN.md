@@ -924,10 +924,13 @@ truecolor shell and a bare runner with no `COLORTERM`. `--ramp standard` would
 have separated them again.
 
 So the check was reading the ambient terminal, not the code. Children are now
-launched with `COLORTERM=truecolor` forced, and the output is byte-identical
-with and without it in the parent. The general form: a black-box check on a CLI
-inherits the environment, and terminal capability detection is *designed* to
-vary with it. Pin what you are testing.
+launched with `COLORTERM=truecolor` forced. That is necessary for the pty
+playback steps, but it does not help the piped `--once` mode loop: a pipe is
+not a tty, colour is dropped, and `blocks` still falls back to the same glyphs
+as ascii's default ramp. The mode loop therefore also passes `--ramp standard`,
+which is what actually separates them. The general form: a black-box check on a
+CLI inherits the environment, and terminal capability detection is *designed*
+to vary with it. Pin what you are testing.
 
 ### Still open
 

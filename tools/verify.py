@@ -27,13 +27,9 @@ GREEN, RED, YELLOW, DIM, RESET = "\x1b[32m", "\x1b[31m", "\x1b[33m", "\x1b[2m", 
 results: list[tuple[str, bool, str]] = []
 
 #: Forced into every child, so what the checks see does not depend on the
-#: terminal that happens to be running them.
-#:
-#: Colour specifically. Without it `blocks` has no colour to work with, falls
-#: back to shaded block glyphs, and comes out byte-identical to `ascii` -- whose
-#: default ramp is those same glyphs. Both correct, and indistinguishable. So
-#: "modes produce distinct output" passed in a truecolor shell and failed on a
-#: bare CI runner, which is the worst way for a check to behave.
+#: terminal that happens to be running them. COLORTERM is pinned for the pty
+#: playback steps; it does not help the piped `--once` mode loop, because a
+#: pipe is not a tty and colour is dropped regardless.
 CHILD_ENV = {**os.environ, "COLORTERM": "truecolor"}
 
 
@@ -204,8 +200,13 @@ def main() -> int:
         rendered: dict[str, str] = {}
         for mode in ("ascii", "ascii-color", "blocks", "halfblock", "braille",
                      "kitty", "iterm", "sixel"):
+            # `--ramp standard` so ascii is not the blocks glyphs. Piped
+            # `--once` drops colour, and without colour `blocks` falls back to
+            # ` ░▒▓█` -- which is ascii's default ramp. Both correct, both
+            # identical, and a false failure on every machine that isn't a
+            # truecolor tty. `--ramp standard` is what actually separates them.
             out = tc(str(clip), "--once", "--width", "30", "--height", "10",
-                     "--mode", mode, "--no-audio")
+                     "--mode", mode, "--ramp", "standard", "--no-audio")
             ok = out.returncode == 0 and len(out.stdout) > 20
             if ok:
                 rendered[mode] = out.stdout
@@ -216,11 +217,9 @@ def main() -> int:
                   fail_hint=out.stderr.strip()[:100])
 
         # Distinct output proves --mode is actually taking effect, which a
-        # per-mode "it didn't crash" check does not. It only means anything with
-        # colour available -- see CHILD_ENV -- because several modes degrade to
-        # the same ramp glyphs without it.
+        # per-mode "it didn't crash" check does not.
         #
-        # ascii and ascii-color are still excluded from each other: piped output
+        # ascii and ascii-color are excluded from each other: piped output
         # carries no colour, and colour is the only thing that separates them,
         # so identical here is correct rather than a failure.
         distinct = {m: v for m, v in rendered.items() if m != "ascii-color"}
