@@ -10,7 +10,7 @@ Play videos — local files or YouTube links — directly in your terminal, with
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![Status: alpha](https://img.shields.io/badge/status-alpha-orange.svg)](DESIGN.md)
 
-<img src="docs/demo-zoom.gif" width="720" alt="A Mandelbrot zoom playing in a terminal, rendered in half blocks">
+<img src="docs/example.gif" width="720" alt="You've been gnomed, playing in the terminal in halfblock mode">
 
 </div>
 
@@ -38,19 +38,9 @@ tinycinema "https://www.youtube.com/watch?v=FtutLA63Cp8"
 
 `space` pause · `r` cycle modes · `q` quit. Everything else is in `tinycinema --help`.
 
-<img src="docs/demo-halfblock.png" width="640" alt="The Mandelbrot set rendered in half-block mode">
+<video src="docs/example.mp4" width="720" controls></video>
 
-<!-- Add a clip you actually like. Drop the file in docs/, uncomment, tweak the alt text.
-<img src="docs/example-1.gif" width="640" alt="">
--->
-
-<!--
-<img src="docs/example-2.png" width="640" alt="">
--->
-
-<!--
-<img src="docs/example-3.gif" width="640" alt="">
--->
+Unmute for sound. If the player doesn't show up, [download the clip](docs/example.mp4).
 
 ## Development
 
